@@ -1,0 +1,2 @@
+# One folder per feature: src/features/<feature-name>/
+# See AGENTS.md (Project structure) for the feature-folder convention.

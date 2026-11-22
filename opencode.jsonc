@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // OpenCode native security enforcement (the "hooks" layer for OpenCode).
+  // Policy source of truth: AGENTS.md. "ask" = stop and request user approval
+  // (fail-safe). These rules apply even if Cursor-style hook scripts are absent.
+  "permissions": [
+    // 1. Project boundary: any path outside the project requires approval.
+    { "action": "external_directory", "resource": "*", "effect": "ask" },
+    // 2. Privacy: no internet access without approval.
+    { "action": "webfetch", "resource": "*", "effect": "ask" },
+    { "action": "websearch", "resource": "*", "effect": "ask" },
+    // 3. Every shell command requires approval (downloads, network, writes).
+    { "action": "shell", "resource": "*", "effect": "ask" }
+  ]
+}

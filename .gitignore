@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+out/
+.next/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Generated tool output
+.playwright-mcp/
+graphify-out/
+reports/ingestion/
+
+# Python tooling
+.pytest_cache/
+.pytest_tmp*/
+.ruff_cache/
+.coverage
+
+# Logs & OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets and sensitive local files: never commit
+mongodb.txt
+commands.txt
+*.pem
+*.key
+.claude/settings.local.json
+
+# Copyrighted source books and local copies of large assets
+pdfs books/
+/JameelNooriNastaleeq.ttf

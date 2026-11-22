@@ -1,0 +1,18 @@
+---
+description: Central security and boundary rules for every AI agent in this repo
+alwaysApply: true
+---
+
+# Security rules (summary)
+
+The full, authoritative policy lives in `AGENTS.md` at the repository root. Read
+and follow it. Key points:
+
+- Stay inside the project folder. No access outside the project without the
+  user's explicit approval.
+- No internet, external APIs, dependency downloads, or telemetry without the
+  user's explicit approval.
+- On any violation **or any doubt**: stop immediately and ask the user.
+- Hooks are a safety net; if they fail, these rules still apply.
+- Always respond in English. Use Context7 for library documentation.
+- Code is organized feature-based under `src/features/` (see AGENTS.md §7).

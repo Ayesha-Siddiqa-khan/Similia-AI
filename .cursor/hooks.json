@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .hooks/guard.ps1",
+        "failClosed": true,
+        "timeout": 15
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .hooks/guard.ps1",
+        "failClosed": true,
+        "timeout": 15
+      }
+    ]
+  }
+}
