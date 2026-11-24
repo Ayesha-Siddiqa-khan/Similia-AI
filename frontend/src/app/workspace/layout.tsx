@@ -1,11 +1,13 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isOperator, isPractitioner } from "@/lib/auth";
 import { AppShell } from "@/components/app-shell";
 import { Loading, Notice } from "@/components/ui";
 
 async function Protected({ children }: { children: React.ReactNode }) {
+  await connection(); // render per request: reading the session compares the token expiry against the clock
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) redirect("/login");
   const client = await createClient();
   const { data, error } = await client.auth.getUser().catch(() => ({ data: { user: null }, error: true }));
