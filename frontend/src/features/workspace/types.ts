@@ -45,9 +45,9 @@ export interface Passage {
   chunk_id: string; book_id: string; book_title: string; book_category: string;
   section_heading: string | null; content: string; similarity: number;
   metadata: Record<string, unknown>; section_path: string[];
-  book_author?: string | null; page_start?: number | null; page_end?: number | null; book_complete?: boolean; retrieval_mode?: "semantic" | "keyword";
+  book_author?: string | null; page_start?: number | null; page_end?: number | null; book_complete?: boolean; retrieval_mode?: "semantic" | "keyword" | "hybrid"; matched_by?: string[];
 }
-export interface SearchResult { query: string; k: number; latency_ms: number; results: Passage[]; incomplete_books?: string[]; retrieval_mode?: "semantic" | "keyword" }
+export interface SearchResult { query: string; k: number; latency_ms: number; results: Passage[]; incomplete_books?: string[]; retrieval_mode?: "semantic" | "keyword" | "hybrid"; requested_mode?: "semantic" | "keyword" | "hybrid"; fallback_reason?: string | null }
 export interface BookIndexStats {
   book_id: string; title: string; category: string; source_filename: string; total_pages: number | null;
   total_chunks: number; embedded_chunks: number; pending_chunks: number; embedded_tokens: number; pending_tokens: number;

@@ -15,8 +15,9 @@ from typing import Any
 import pymupdf
 
 from app.ai.ingestion.adaptive import VERSION, TokenCounter, make_chunks, processing_parts
+from app.core.paths import data_dir
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = data_dir()
 REPORTS = ROOT / "reports" / "ingestion"
 
 

@@ -25,6 +25,9 @@ through the proxy at `/api/backend/<path>`. Response and request shapes are the 
 | Method and path | Purpose | Returns |
 |---|---|---|
 | `GET ingestion/overview` | every book with real index counts, active jobs, limits | `OverviewOut` |
+| `GET ingestion/books/list.pdf` | PDF list of every book's source document name (free: no provider call) | `application/pdf` |
+| `POST ingestion/auto` | body `{book_ids, confirmed}`; queue books for automatic resume, one at a time (spends tokens; 409 without `confirmed: true`) | `{queued: [{book_id, title, pending_chunks, pending_tokens}], skipped: [{book_id, title?, reason}], total_pending_tokens}` |
+| `POST ingestion/auto/stop` | body `{book_ids?}` (omit = all); a running job finishes its current batch, then stops; the book stays resumable | `{stopped: string[]}` |
 | `GET books/{id}/ingestion` | plan, last 10 jobs, last 50 events for one book | `BookIngestionOut` |
 | `POST books/{id}/prepare` | extract and split text (free) | `PlanOut` |
 | `POST books/{id}/ingest` | body `StartRequest`; start/resume/retry (spends tokens) | `JobOut` (HTTP 202) |
@@ -35,6 +38,10 @@ through the proxy at `/api/backend/<path>`. Response and request shapes are the 
 | `GET books/{id}/text?offset=0&limit=5` | inspect extracted text by PDF page | `TextPreview` |
 | `POST books` | upload (multipart: `file`, `title`, `category`, optional `author`, `publisher`, `publication_year`, `language`, `source_uri`) | `BookOut` (HTTP 201) |
 | `POST search` | RAG search; results carry `page_start`, `page_end`, `book_complete`; response carries `incomplete_books` | `SearchResponse` |
+
+Each item of `overview.books` also carries: `state` (`running`, `stalled`, `paused`, `error`, `interrupted`, `complete`,
+`partial`, `ready`, `not_prepared`), `detail` (short reason or null), `idle_seconds` (web jobs only), `latest_job`
+(`JobOut` or null) and `auto_resume` (`enabled`, `position` where 1 = running now or next, `since`, `failures`, `note`).
 
 Categories: `materia_medica`, `repertory`, `organon`, `general`.
 
@@ -56,3 +63,9 @@ confirmation missing), 422 (invalid file or input), 429 (provider stop is set, o
 - A book with `frozen_plan: true` belongs to the command-line pipeline: show that, and do not offer Start.
 - A book with `complete: false` is only partly searchable. Say so wherever its passages appear.
 - Page numbers are PDF page numbers, not printed page numbers. Label them "PDF page".
+- Status chip per book from `state`, always icon plus text. The overview refreshes every 5 s while a book is running or
+  stalled or an automatic queue exists, otherwise every 30 s, and not while the tab is hidden.
+- Automatic resume: books are chosen with checkboxes (frozen-plan, unprepared, complete and already-automatic books are
+  disabled) or "Resume all". Only the confirmation dialog sends `POST ingestion/auto` with `confirmed: true`. It lists the
+  books, estimated tokens, provider host, model, per-job limit, remaining budget and pace. Stop controls
+  (`POST ingestion/auto/stop`) need no confirmation. Auto buttons are disabled while `limits.provider_paused` is true.

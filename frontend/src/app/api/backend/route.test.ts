@@ -40,6 +40,20 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+it("allows for cold speech worker startup and model loading while forwarding authentication", async () => {
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  try {
+    expect((await call(POST, "POST", ["speech", "load"])).status).toBe(200);
+    expect(timeout).toHaveBeenCalledWith(250_000);
+    expect(backend.mock.calls[0][1].headers.Authorization).toBe("Bearer test-token");
+    session.signedIn = false;
+    expect((await call(POST, "POST", ["speech", "load"])).status).toBe(401);
+    expect(backend).toHaveBeenCalledTimes(1);
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
 describe("which paths are reachable", () => {
   it("refuses anything that is not on the allow-list, including path tricks", async () => {
     for (const [handler, method, path] of [
@@ -56,11 +70,87 @@ describe("which paths are reachable", () => {
     for (const [handler, method, path] of [
       [GET, "GET", ["patients"]], [GET, "GET", ["cases", ID]], [PUT, "PUT", ["cases", ID, "symptoms"]], [PATCH, "PATCH", ["cases", ID]],
       [POST, "POST", ["cases", ID, "reopen"]], [POST, "POST", ["cases", ID, "analyze"]], [DELETE, "DELETE", ["settings", "ai"]],
-      [POST, "POST", ["settings", "ai", "activate"]],
+      [POST, "POST", ["settings", "ai", "activate"]], [POST, "POST", ["cases", ID, "report", "urdu"]],
+      [GET, "GET", ["cases", ID, "review"]], [GET, "GET", ["cases", ID, "prescription", "file"]],
     ] as const) {
       const response = await call(handler, method, [...path], method === "GET" || method === "DELETE" ? {} : { body: "{}" });
       expect(response.status, `${method} ${path.join("/")}`).toBe(200);
     }
+  });
+});
+
+describe("the Urdu report endpoint", () => {
+  it("is reachable by POST for a practitioner, with the analysis id passed through", async () => {
+    answer(200, { analysis_id: "a" });
+    const response = await POST(new Request(`${ORIGIN}/api/backend/cases/${ID}/report/urdu?analysis_id=${ID}`, { method: "POST", headers: { origin: ORIGIN } }), { params: Promise.resolve({ path: ["cases", ID, "report", "urdu"] }) });
+    expect(response.status).toBe(200);
+    expect(String(backend.mock.calls[0][0])).toBe(`http://localhost:8000/api/cases/${ID}/report/urdu?analysis_id=${ID}`);
+  });
+  it("is refused with 403 for an account with no role", async () => {
+    session.role = null;
+    expect((await call(POST, "POST", ["cases", ID, "report", "urdu"])).status).toBe(403);
+    expect(backend).not.toHaveBeenCalled();
+  });
+  it("is not readable with GET", async () => {
+    expect((await call(GET, "GET", ["cases", ID, "report", "urdu"])).status).toBe(404);
+    expect(backend).not.toHaveBeenCalled();
+  });
+});
+
+describe("prescription download proxy", () => {
+  it("streams binary PDF attachment for prescription/file", async () => {
+    backend.mockImplementation(async () => new Response(new Uint8Array([37, 80, 68, 70]), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="prescription-P1.pdf"',
+      },
+    }));
+    const response = await call(GET, "GET", ["cases", ID, "prescription", "file"]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    expect(response.headers.get("Content-Disposition")).toBe('attachment; filename="prescription-P1.pdf"');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70]));
+  });
+});
+
+describe("clinical workflow proxy", () => {
+  it("forwards private photo bytes and disables caching", async () => {
+    backend.mockImplementation(async () => new Response(new Uint8Array([255, 216, 255]), {
+      headers: { "Content-Type": "image/jpeg" },
+    }));
+    const response = await call(GET, "GET", ["cases", ID, "photos", ID, "full"]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([255, 216, 255]));
+  });
+
+  it("requires authentication and the same origin for clinical mutations", async () => {
+    const sign = ["cases", ID, "workflow", "final", "sign"];
+    expect((await call(POST, "POST", sign, { origin: "https://elsewhere.invalid" })).status).toBe(403);
+    session.signedIn = false;
+    expect((await call(POST, "POST", sign)).status).toBe(401);
+    expect(backend).not.toHaveBeenCalled();
+  });
+
+  it("forwards a multipart clinical photo and rejects oversized uploads", async () => {
+    const boundary = "clinical-fixture";
+    const headers = { "Content-Type": `multipart/form-data; boundary=${boundary}` };
+    const payload = [
+      `--${boundary}`, 'Content-Disposition: form-data; name="file"; filename="photo.jpg"',
+      "Content-Type: image/jpeg", "", "fixture",
+      `--${boundary}`, 'Content-Disposition: form-data; name="body_site"', "", "hand",
+      `--${boundary}--`, "",
+    ].join("\r\n");
+    const path = ["cases", ID, "photos"];
+    expect((await call(POST, "POST", path, { body: payload, headers })).status).toBe(200);
+    const init = backend.mock.calls[0][1];
+    expect(init.headers["Content-Type"]).toBe(headers["Content-Type"]);
+    expect(new TextDecoder().decode(init.body)).toBe(payload);
+    expect((await call(POST, "POST", path, {
+      body: "x".repeat(9 * 1024 * 1024), headers,
+    })).status).toBe(413);
+    expect(backend).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -106,6 +196,23 @@ describe("request safety", () => {
 });
 
 describe("what the browser learns from failures", () => {
+  it("shows only the fixed provider rejection message for analysis failures", async () => {
+    const path = ["cases", ID, "analyze"];
+    for (const detail of [
+      "The AI provider rejected the analysis. Check your key, model and billing in AI Settings.",
+      "Claude rejected the analysis because of a billing issue. Check billing and available credits in the Anthropic Console, then try again.",
+      "The source library could not be searched. Try again later.",
+      "Analysis failed while interpreting the retrieved sources. Try again later.",
+    ]) {
+      answer(502, { detail });
+      const rejected = await call(POST, "POST", path);
+      expect(rejected.status).toBe(502);
+      expect((await rejected.json()).detail).toBe(detail);
+    }
+    answer(502, { detail: "Private provider error" });
+    const unexpected = await call(POST, "POST", path);
+    expect((await unexpected.json()).detail).toBe("The analysis service failed. Try again later.");
+  });
   it("shows the backend's own explanation for conflicts and validation problems", async () => {
     answer(409, { detail: "This case is signed off and locked. Reopen it to make changes." });
     const locked = await call(PUT, "PUT", ["cases", ID, "symptoms"], { body: "{}" });
@@ -158,6 +265,43 @@ describe("ingestion endpoints", () => {
     }
     expect(backend).not.toHaveBeenCalled();
   });
+  it("allows the automatic-resume endpoints for operators only and forwards the body untouched", async () => {
+    session.role = "operator";
+    const body = JSON.stringify({ book_ids: [ID], confirmed: true });
+    expect((await call(POST, "POST", ["ingestion", "auto"], { body })).status).toBe(200);
+    expect((await call(POST, "POST", ["ingestion", "auto", "stop"], { body: JSON.stringify({ book_ids: [ID] }) })).status).toBe(200);
+    expect(backend.mock.calls[0][0]).toMatch(/\/api\/ingestion\/auto$/);
+    expect(backend.mock.calls[0][1].body).toBe(body);
+    expect(backend.mock.calls[1][1].body).toBe(JSON.stringify({ book_ids: [ID] }));
+    expect(backend).toHaveBeenCalledTimes(2);
+    expect((await call(GET, "GET", ["ingestion", "auto"])).status).toBe(404);
+    expect((await call(GET, "GET", ["ingestion", "auto", "stop"])).status).toBe(404);
+    expect(backend).toHaveBeenCalledTimes(2);
+  });
+  it("answers 403 to a practitioner-only account on the automatic-resume endpoints", async () => {
+    session.role = "practitioner";
+    expect((await call(POST, "POST", ["ingestion", "auto"], { body: JSON.stringify({ book_ids: [ID], confirmed: true }) })).status).toBe(403);
+    expect((await call(POST, "POST", ["ingestion", "auto", "stop"], { body: "{}" })).status).toBe(403);
+    expect(backend).not.toHaveBeenCalled();
+  });
+  it("passes the book-list PDF through as a download for an operator", async () => {
+    session.role = "operator";
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    backend.mockImplementation(async () => new Response(bytes, { status: 200, headers: { "content-type": "application/pdf", "content-disposition": 'attachment; filename="ingestion-book-list.pdf"' } }));
+    const response = await call(GET, "GET", ["ingestion", "books", "list.pdf"]);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+    expect(response.headers.get("content-disposition")).toContain("ingestion-book-list.pdf");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    expect(String(backend.mock.calls[0][0])).toBe("http://localhost:8000/api/ingestion/books/list.pdf");
+  });
+  it("keeps the book-list PDF for operators only and refuses other methods", async () => {
+    session.role = "practitioner";
+    expect((await call(GET, "GET", ["ingestion", "books", "list.pdf"])).status).toBe(403);
+    session.role = "operator";
+    expect((await call(POST, "POST", ["ingestion", "books", "list.pdf"], { body: "{}" })).status).toBe(404);
+    expect(backend).not.toHaveBeenCalled();
+  });
   it("answers 404 to unknown ingestion variants, even for an operator", async () => {
     session.role = "operator";
     for (const [handler, method, path] of [
@@ -207,5 +351,24 @@ describe("patient safeguard endpoints", () => {
     expect((await call(DELETE, "DELETE", ["patients"])).status).toBe(404);
     expect((await call(DELETE, "DELETE", ["cases", ID])).status).toBe(404);
     expect(backend).not.toHaveBeenCalled();
+  });
+});
+
+describe("report file download", () => {
+  it("passes a PDF through untouched with its download headers", async () => {
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]);
+    backend.mockImplementation(async () => new Response(bytes, { status: 200, headers: { "content-type": "application/pdf", "content-disposition": 'attachment; filename="case-11111111-report-en.pdf"' } }));
+    const response = await call(POST, "POST", ["cases", ID, "report", "file"], { body: JSON.stringify({ format: "pdf", lang: "en" }) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+    expect(response.headers.get("content-disposition")).toContain("case-11111111-report-en.pdf");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
+  it("is refused with 403 without a role and 404 for GET", async () => {
+    session.role = null;
+    expect((await call(POST, "POST", ["cases", ID, "report", "file"], { body: "{}" })).status).toBe(403);
+    session.role = "practitioner";
+    expect((await call(GET, "GET", ["cases", ID, "report", "file"])).status).toBe(404);
   });
 });

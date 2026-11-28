@@ -2,6 +2,7 @@
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,24 @@ router = APIRouter(
 )
 
 
+# SIMILIA_DESKTOP_REPORTS_FALLBACK_V1
+_REQUIRED_REPORTS = ("pdf_inventory.json", "ingestion_progress.json", "run_manifest.json")
+
+
+def report_directory() -> Path:
+    """Prefer writable user reports; otherwise use read-only reports bundled in the installer."""
+    if all((REPORTS / name).is_file() for name in _REQUIRED_REPORTS):
+        return REPORTS
+    if getattr(sys, "frozen", False):
+        packaged = Path(sys.executable).resolve().parent / "reports" / "ingestion"
+        if all((packaged / name).is_file() for name in _REQUIRED_REPORTS):
+            return packaged
+    return REPORTS
+
+
 def artifact(name: str) -> dict[str, Any]:
     try:
-        return json.loads((REPORTS / name).read_text(encoding="utf-8"))
+        return json.loads((report_directory() / name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise HTTPException(503, "Ingestion report is unavailable") from None
 
@@ -29,6 +45,27 @@ def checkpoint(value: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/snapshot")
 def snapshot() -> dict[str, Any]:
+    # An unconfigured monitoring directory must not make the whole desktop app look offline.
+    directory = report_directory()
+    if not all((directory / name).is_file() for name in _REQUIRED_REPORTS):
+        return {
+            "timestamp": None,
+            "status": "not_configured",
+            "provider_paused": None,
+            "inventory": [],
+            "books": [],
+            "usage": {},
+            "budget": None,
+            "reserve": None,
+            "required_action": "Import existing ingestion reports to enable RAG monitoring.",
+            "capabilities": {
+                "analyse": False, "preview": False, "start": False,
+                "pause": False, "resume": False, "retry": False,
+                "category_update": False,
+            },
+            "control_reason": "Local ingestion monitoring reports are not configured.",
+            "source": "unavailable",
+        }
     inv = artifact("pdf_inventory.json")
     progress = artifact("ingestion_progress.json")
     manifest = artifact("run_manifest.json")
@@ -108,7 +145,7 @@ def chunks(
         "selected_hashes", []
     ):
         raise HTTPException(404, "No selected chunk plan for this book")
-    plan_path: Path = REPORTS / "sources" / file_hash / "plan.json"
+    plan_path: Path = report_directory() / "sources" / file_hash / "plan.json"
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

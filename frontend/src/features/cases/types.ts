@@ -94,7 +94,8 @@ export interface AnalysisPassage {
   page_start?: number | null;
   page_end?: number | null;
   book_complete?: boolean;
-  retrieval_mode?: "semantic" | "keyword";
+  retrieval_mode?: "semantic" | "keyword" | "hybrid";
+  matched_by?: string[];
   content: string;
   similarity: number;
 }
@@ -110,7 +111,9 @@ export interface Analysis {
   passages: AnalysisPassage[];
   missing_information: string[];
   incomplete_books?: string[];
-  retrieval_mode?: "semantic" | "keyword";
+  requested_mode?: "semantic" | "keyword" | "hybrid" | "unknown" | "not_run";
+  fallback_reason?: string | null;
+  retrieval_mode?: "semantic" | "keyword" | "hybrid" | "mixed" | "not_run" | "unknown";
   model: string | null;
   created_at: string;
   disclaimer: string;
@@ -131,12 +134,45 @@ export interface AiSettings {
   configured: boolean;
   vault_ready: boolean;
   provider: string;
+  providers: (AiModelOption & { model_example?: string | null })[];
   key_last4: string | null;
   model: string;
   validated_at: string | null;
   models: AiModelOption[];
   active: boolean;
   active_until: string | null;
+  hourly_analysis_limit?: number | null;
+  daily_analysis_limit?: number | null;
   active_options: AiModelOption[];
-  usage: { window_minutes: number; questions: { used: number; limit: number }; analyses: { used: number; limit: number } } | null;
+  usage: { window_minutes: number; questions: { used: number; limit: number }; analyses: { used: number; limit: number }; daily_analyses?: { used: number; limit: number } } | null;
+}
+
+/** Machine translation of the AI-written wording of one analysis (same item count and order as the English). */
+export interface UrduReport {
+  analysis_id: string;
+  chief_complaint: string;
+  red_flags: string[];
+  cautions: string[];
+  remedies: { remedy: string; rationale: string; matching_symptoms: string[]; contradicting_symptoms: string[] }[];
+  missing_information: string[];
+  notice: string;
+}
+
+export interface Review {
+  id: string;
+  case_id: string;
+  analysis_id: string;
+  decision: "accepted" | "modified" | "rejected";
+  chosen_remedy: string | null;
+  diagnosis?: string | null;
+  potency?: string | null;
+  dose?: string | null;
+  frequency?: string | null;
+  duration?: string | null;
+  instructions?: string | null;
+  urgency_disposition?: string | null;
+  include_urgent_in_pdf?: boolean;
+  practitioner_name?: string | null;
+  notes?: string | null;
+  signed_at: string;
 }

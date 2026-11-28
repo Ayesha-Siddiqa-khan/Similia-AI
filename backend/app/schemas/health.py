@@ -9,5 +9,6 @@ class HealthResponse(BaseModel):
     app: str
     status: str
     version: str
+    instance_id: str | None = None
     environment: str
     services: dict[str, bool]

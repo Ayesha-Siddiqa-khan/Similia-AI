@@ -4,18 +4,34 @@ Every handler is owner-scoped: the verified user id from `require_practitioner`
 is passed to the store, so another practitioner's record behaves like a 404.
 """
 
+import json
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from langsmith import tracing_context
+from pydantic import BaseModel
 
-from app.ai.rag.case_analysis import AnalysisResult, CaseAnalyzer, ClaudeReasoner
+from app.ai.rag.case_analysis import (
+    AnalysisResult,
+    AnalysisStageError,
+    CaseAnalyzer,
+    ClaudeReasoner,
+)
 from app.ai.rag.case_questions import ClaudeQuestionWriter, QuestionWriter, suggest_questions
 from app.ai.rag.coverage import book_completeness
 from app.ai.rag.guard import embedding_paused
-from app.ai.rag.retrieval import FallbackRetriever, KeywordRetriever, Retriever, VectorRetriever
+from app.ai.rag.report_translation import (
+    ClaudeReportTranslator,
+    ReportTranslator,
+    UrduReport,
+    build_source,
+    matches_shape,
+)
+from app.ai.rag.retrieval import analysis_search_info, build_retriever
 from app.api.auth import require_practitioner
 from app.api.routes.ai_settings import get_ai_store
 from app.core.config import get_settings
@@ -34,15 +50,19 @@ from app.schemas.cases import (
     ReviewIn,
     ReviewOut,
     SymptomsPut,
+    UrduReportOut,
 )
-from app.services import ai_limits, patient_rules
+from app.services import ai_limits, patient_rules, report_files
 from app.services.case_db import CaseStore, CaseStoreError, SupabaseCaseStore
+from app.services.compatible_llm import CompatibleProviderError
 from app.services.embeddings import get_embedding_provider
-from app.services.llm import AnthropicLLMProvider
+from app.services.knowledge_db import KnowledgeDBError
+from app.services.llm import LLMProvider
 from app.services.supabase import get_supabase_admin_client
 from app.services.user_ai import KeyPausedError, NoUserKeyError, UserAIStore, provider_for
 
 logger = logging.getLogger(__name__)
+SearchMode = Literal["semantic", "keyword", "hybrid"]
 router = APIRouter(prefix="/api", tags=["cases"])
 
 Owner = Annotated[str, Depends(require_practitioner)]
@@ -58,10 +78,50 @@ def get_case_store() -> CaseStore:
     return SupabaseCaseStore(get_supabase_admin_client())
 
 
-def _own_llm(owner: str, ai: UserAIStore) -> AnthropicLLMProvider:
+# Fixed reason codes for provider failures. Matching happens locally against the
+# provider's own error message; only the code is ever logged, never the message.
+_PROVIDER_REASON_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("billing", ("credit balance", "billing", "insufficient funds", "payment")),
+    (
+        "context_length",
+        ("prompt is too long", "context length", "too many tokens", "request_too_large"),
+    ),
+    ("tool_choice", ("tool_choice",)),
+    ("structured_output", ("output_config", "json_schema", "response_format", "schema")),
+    ("max_tokens", ("max_tokens",)),
+    ("sampling", ("temperature", "top_p", "top_k")),
+    ("model", ("model", "not found", "does not exist")),
+)
+
+
+def _provider_error_type(exc: Exception) -> str:
+    """The provider's error class (e.g. `invalid_request_error`), if exposed."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error", body)
+        if isinstance(error, dict) and isinstance(error.get("type"), str):
+            return error["type"]
+    return "unknown"
+
+
+def _provider_error_reason(exc: Exception) -> str:
+    """Classify a provider error without ever logging its raw message."""
+    if isinstance(exc, CompatibleProviderError):
+        return exc.message or {400: "invalid_request", 429: "rate_limit"}.get(
+            exc.status_code, "unclassified"
+        )
+    message = getattr(exc, "message", "")
+    text = message.lower() if isinstance(message, str) else ""
+    for code, hints in _PROVIDER_REASON_HINTS:
+        if any(hint in text for hint in hints):
+            return code
+    return "unclassified"
+
+
+def _own_llm(row: dict[str, Any] | None) -> LLMProvider:
     """The signed-in practitioner's own AI provider (their key, their model)."""
     try:
-        return provider_for(owner, ai)
+        return provider_for(row)
     except NoUserKeyError:
         raise HTTPException(
             status.HTTP_428_PRECONDITION_REQUIRED,
@@ -82,36 +142,56 @@ AIStore = Annotated[UserAIStore, Depends(get_ai_store)]
 
 
 def get_question_writer(owner: Owner, ai: AIStore) -> QuestionWriter:
-    return ClaudeQuestionWriter(_own_llm(owner, ai))
+    return ClaudeQuestionWriter(_own_llm(ai.get(owner)))
 
 
-def get_analyzer(owner: Owner, ai: AIStore) -> CaseAnalyzer:
-    llm = _own_llm(owner, ai)
+def get_report_translator(owner: Owner, ai: AIStore) -> ReportTranslator:
+    return ClaudeReportTranslator(_own_llm(ai.get(owner)))
+
+
+def get_analyzer(
+    owner: Owner,
+    ai: AIStore,
+    search_mode: Annotated[SearchMode, Query()] = "semantic",
+) -> CaseAnalyzer:
+    row = ai.get(owner)
+    llm = _own_llm(row)
     db = get_supabase_admin_client()
-    vector = VectorRetriever(db=db, embedder=get_embedding_provider())
-    # While the provider stop is set, or the provider cannot be used, word matching takes over
-    # (free, labelled as keyword matching in the result).
-    retriever: Retriever = (
-        KeywordRetriever(db)
-        if embedding_paused()
-        else FallbackRetriever(vector, KeywordRetriever(db))
-    )
+    # The requested search method, with a safe fall back to keyword matching when the provider
+    # stop is set or the provider cannot be used. The result says which method actually ran.
+    retriever = build_retriever(search_mode, db, get_embedding_provider, paused=embedding_paused())
     return CaseAnalyzer(
         retriever,
         ClaudeReasoner(llm),
         min_similarity=get_settings().rag_min_similarity,
         completeness=lambda: book_completeness(db),
+        model=llm.model,
+        hourly_analysis_limit=row.get("hourly_analysis_limit") if row else None,
+        daily_analysis_limit=row.get("daily_analysis_limit") if row else None,
+        cache_scope=owner,
     )
 
 
 Store = Annotated[CaseStore, Depends(get_case_store)]
 Analyzer = Annotated[CaseAnalyzer, Depends(get_analyzer)]
 Writer = Annotated[QuestionWriter, Depends(get_question_writer)]
+Translator = Annotated[ReportTranslator, Depends(get_report_translator)]
 
 
-def _enforce_limit(store: CaseStore, owner: str, kind: ai_limits.Kind) -> None:
+def _enforce_limit(
+    store: CaseStore,
+    owner: str,
+    kind: ai_limits.Kind,
+    *,
+    hourly_analysis_limit: int | None = None,
+    daily_analysis_limit: int | None = None,
+) -> None:
     try:
-        ai_limits.enforce(store, owner, kind)
+        ai_limits.enforce(
+            store, owner, kind,
+            hourly_analysis_limit=hourly_analysis_limit,
+            daily_analysis_limit=daily_analysis_limit,
+        )
     except ai_limits.RateLimitedError as limited:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -144,17 +224,12 @@ def _analysis_out(row: dict, cautions: list[str] | None = None) -> AnalysisOut:
             if isinstance(p, dict) and p.get("book_complete") is False and p.get("book_title")
         }
     )
-    mode = (
-        "keyword"
-        if any(isinstance(p, dict) and p.get("retrieval_mode") == "keyword" for p in passages)
-        else "semantic"
-    )
     return AnalysisOut(
         **{
             **row,
             "incomplete_books": incomplete,
             "cautions": cautions or [],
-            "retrieval_mode": mode,
+            **analysis_search_info(row),
         }
     )
 
@@ -329,12 +404,17 @@ def export_patient(patient_id: UUID, owner: Owner, store: Store) -> dict:
             }
         )
     store.audit(owner, "patient.export", "patient", str(patient_id))
+    clinical_export = (
+        store.export_clinical(owner, str(patient_id), [case["id"] for case in cases])
+        if isinstance(store, SupabaseCaseStore) else {}
+    )
     return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "format": "similia-patient-export-v1",
         "patient": patient,
         "consents": store.list_consents(owner, str(patient_id)),
         "cases": cases,
+        **clinical_export,
     }
 
 
@@ -461,6 +541,8 @@ def analyze_case(
     analyzer: Analyzer,
     acknowledge_red_flags: Annotated[bool, Query()] = False,
 ) -> AnalysisOut:
+    if get_settings().clinical_workflow_enabled:
+        raise HTTPException(409, "Start a new analysis in Clinical reports")
     case = _found(store.get_case(owner, str(case_id)), "Case")
     if case["status"] == "signed_off":
         raise HTTPException(status.HTTP_409_CONFLICT, SIGNED_OFF)
@@ -469,25 +551,106 @@ def analyze_case(
         raise HTTPException(409, "No active patient consent on record")
     if not case["symptoms"] and not case["chief_complaint"].strip():
         raise HTTPException(422, "Add a chief complaint or symptoms before analysis")
-    _enforce_limit(store, owner, "analyses")
+    _enforce_limit(
+        store, owner, "analyses",
+        hourly_analysis_limit=analyzer.hourly_analysis_limit,
+        daily_analysis_limit=analyzer.daily_analysis_limit,
+    )
     action = "case.analyze.acknowledged_red_flags" if acknowledge_red_flags else "case.analyze"
     store.audit(owner, action, "case", str(case_id))  # counted even if the AI call fails
     infant = patient_rules.is_infant(patient)
     if infant and not acknowledge_red_flags:
         # An infant is never analysed until the practitioner confirms they assessed urgency.
-        result = AnalysisResult(outcome="red_flag", red_flags=[patient_rules.INFANT_FLAG])
+        result = AnalysisResult(
+            outcome="red_flag",
+            red_flags=[patient_rules.INFANT_FLAG],
+            retrieval={
+                "requested_mode": getattr(analyzer, "requested_mode", "semantic"),
+                "retrieval_mode": "not_run",
+                "fallback_reason": None,
+            },
+        )
     else:
         try:
-            result = analyzer.analyze(case, acknowledge_red_flags=acknowledge_red_flags)
-        except Exception as exc:
-            # Only the error type and status go to the log: the message or traceback could
-            # contain the patient's text.
+            with tracing_context(enabled=False):
+                result = analyzer.analyze(
+                    {**case, "_search_identifiers": (
+                        patient.get("full_name") or "", patient.get("identifier") or "",
+                    )},
+                    acknowledge_red_flags=acknowledge_red_flags,
+                )
+        except Exception as failure:
+            stage = failure.stage if isinstance(failure, AnalysisStageError) else None
+            exc = failure.cause if isinstance(failure, AnalysisStageError) else failure
+            reason = _provider_error_reason(exc)
+            provider_status = getattr(exc, "http_status", None) or getattr(exc, "status_code", None)
+            # Only the error type, status and a fixed reason code go to the log: the message
+            # or traceback could contain the patient's text.
             logger.error(
-                "Case analysis failed: %s (http_status=%s)",
+                "Case analysis failed: %s (stage=%s, http_status=%s, provider_error=%s, reason=%s)",
                 type(exc).__name__,
-                getattr(exc, "http_status", None) or getattr(exc, "status_code", None),
+                stage or "unknown",
+                provider_status,
+                _provider_error_type(exc),
+                reason,
             )
-            raise HTTPException(502, "The analysis service failed. Try again later.") from None
+            if stage == "retrieve_sources" or isinstance(exc, KnowledgeDBError):
+                raise HTTPException(
+                    502, "The source library could not be searched. Try again later."
+                ) from None
+            if reason == "billing":
+                if isinstance(exc, CompatibleProviderError):
+                    raise HTTPException(
+                        502,
+                        "The selected AI provider rejected the analysis because of a billing "
+                        "issue. "
+                        "Check billing and available credits with that provider, then try again.",
+                    ) from None
+                raise HTTPException(
+                    502,
+                    "Claude rejected the analysis because of a billing issue. "
+                    "Check billing and available credits in the Anthropic Console, then try again.",
+                ) from None
+            if isinstance(exc, CompatibleProviderError):
+                detail = {
+                    "rate_limit": "The AI provider reached its rate or quota limit. "
+                    "Check the limits for your selected model, then try again.",
+                    "model not found": "The selected model is unavailable to this API key. "
+                    "Choose another model in AI Settings.",
+                    "invalid_request": "The AI provider rejected the request for this model. "
+                    "Choose another chat model in AI Settings.",
+                    "account_restriction": "The AI provider blocked generation for this account. "
+                    "Check API access and free-tier availability with your provider.",
+                    "invalid_output": "The AI provider returned an incomplete response. "
+                    "Try again or choose another chat model in AI Settings.",
+                    "unavailable": "The connection to the AI provider failed or timed out. "
+                    "Try again later.",
+                }.get(reason)
+                if detail:
+                    raise HTTPException(502, detail) from None
+                if exc.status_code == 503:
+                    raise HTTPException(
+                        502, "The AI provider returned HTTP 503 and is temporarily unavailable."
+                    ) from None
+                if exc.status_code >= 500:
+                    raise HTTPException(
+                        502, "The AI provider did not respond. Try again later."
+                    ) from None
+            if provider_status in (401, 403) or (
+                provider_status in (400, 404) and reason == "model"
+            ):
+                raise HTTPException(
+                    502,
+                    "The AI provider rejected the analysis. "
+                    "Check your key, model and billing in AI Settings.",
+                ) from None
+            detail = {
+                "prepare_queries": "Analysis failed while preparing the search queries. "
+                "Try again later.",
+                "rank_sources": "Analysis failed while interpreting the retrieved sources. "
+                "Try again later.",
+            }.get(stage, "The analysis service failed. Try again later.")
+            raise HTTPException(502, detail) from None
         if infant:
             result.red_flags = [patient_rules.INFANT_FLAG, *result.red_flags]
     row = store.save_analysis(
@@ -499,8 +662,11 @@ def analyze_case(
             "remedies": result.remedies,
             "passages": result.passages,
             "missing_information": result.missing_information,
-            "queries": result.queries,
-            "model": get_settings().anthropic_model,
+            "queries": (
+                {"phrases": result.queries, "retrieval": result.retrieval}
+                if result.retrieval else result.queries
+            ),
+            "model": analyzer.model or get_settings().anthropic_model,
         },
     )
     if result.outcome != "red_flag":
@@ -528,6 +694,141 @@ def analysis_history(case_id: UUID, owner: Owner, store: Store) -> list[Analysis
     return [_analysis_out(r, cautions) for r in store.list_analyses(owner, str(case_id))]
 
 
+@router.post("/cases/{case_id}/report/urdu", response_model=UrduReportOut)
+def urdu_report(
+    case_id: UUID,
+    owner: Owner,
+    store: Store,
+    translator: Translator,
+    analysis_id: Annotated[UUID | None, Query()] = None,
+) -> UrduReportOut:
+    """Urdu text for the printable report (one AI call on the doctor's own key).
+
+    Only the AI-written text is translated and sent: never the patient's name, ID or contact,
+    and never the book passages.
+    """
+    case = _found(store.get_case(owner, str(case_id)), "Case")
+    patient = _found(store.get_patient(owner, case["patient_id"]), "Patient")
+    if not store.has_active_consent(owner, case["patient_id"]):
+        raise HTTPException(409, "No active patient consent on record")
+    row = (
+        store.get_analysis(owner, str(analysis_id))
+        if analysis_id
+        else store.latest_analysis(owner, str(case_id))
+    )
+    analysis = _found(row, "Analysis")
+    if analysis["case_id"] != str(case_id):
+        raise HTTPException(404, "Analysis not found")
+    _enforce_limit(store, owner, "questions")
+    store.audit(owner, "case.report.urdu", "case", str(case_id))  # counted even if the call fails
+    source = build_source(case, {**analysis, "cautions": patient_rules.cautions(patient)})
+    try:
+        urdu = translator.to_urdu(source)
+    except Exception as exc:
+        logger.error("Urdu report failed: %s", type(exc).__name__)
+        raise HTTPException(502, "The translation service failed. Try again later.") from None
+    if not matches_shape(source, urdu):
+        logger.error("Urdu report rejected: the translation did not match the English items")
+        raise HTTPException(502, "The translation was incomplete. Try again.")
+    return UrduReportOut(analysis_id=analysis["id"], **urdu.model_dump())
+
+
+class ReportFileRequest(BaseModel):
+    format: Literal["pdf", "docx"]
+    lang: Literal["en", "ur"] = "en"
+    analysis_id: UUID | None = None
+    translation: UrduReport | None = None  # required for Urdu: the translation already shown
+
+
+_MEDIA = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+@router.post("/cases/{case_id}/report/file")
+def report_file(case_id: UUID, body: ReportFileRequest, owner: Owner, store: Store) -> Response:
+    """The report as a PDF or Word file. No AI call; nothing is stored.
+
+    The Urdu version uses the translation the practitioner already saw: it must line up item for
+    item with the English analysis or the request is refused.
+    """
+    case = _found(store.get_case(owner, str(case_id)), "Case")
+    patient = _found(store.get_patient(owner, case["patient_id"]), "Patient")
+    row = (
+        store.get_analysis(owner, str(body.analysis_id))
+        if body.analysis_id
+        else store.latest_analysis(owner, str(case_id))
+    )
+    analysis = _found(row, "Analysis")
+    if analysis["case_id"] != str(case_id):
+        raise HTTPException(404, "Analysis not found")
+    cautions = patient_rules.cautions(patient)
+    translation = None
+    if body.lang == "ur":
+        translation = body.translation
+        if translation is None:
+            raise HTTPException(422, "Translate the report to Urdu first")
+        source = build_source(case, {**analysis, "cautions": cautions})
+        if not matches_shape(source, translation):
+            raise HTTPException(
+                422, "The translation does not match this analysis. Translate again."
+            )
+    blocks = report_files.build_blocks(
+        case,
+        patient,
+        analysis,
+        body.lang,
+        translation,
+        datetime.now(timezone.utc).strftime("%d %b %Y"),
+        cautions,
+    )
+    try:
+        data = (
+            report_files.render_pdf(blocks, body.lang)
+            if body.format == "pdf"
+            else report_files.render_docx(blocks, body.lang)
+        )
+    except Exception as exc:
+        logger.error("Report file failed: %s", type(exc).__name__)
+        raise HTTPException(500, "The report file could not be created.") from None
+    store.audit(owner, "case.report.download", "case", str(case_id))
+    name = f"case-{str(case_id)[:8]}-report-{body.lang}.{body.format}"
+    return Response(
+        data,
+        media_type=_MEDIA[body.format],
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+def _unpack_review_row(row: dict[str, Any]) -> dict[str, Any]:
+    notes = row.get("notes") or ""
+    data = dict(row)
+    if isinstance(notes, str) and notes.startswith("{") and notes.endswith("}"):
+        try:
+            parsed = json.loads(notes)
+            if isinstance(parsed, dict):
+                for k in (
+                    "diagnosis",
+                    "potency",
+                    "dose",
+                    "frequency",
+                    "duration",
+                    "instructions",
+                    "urgency_disposition",
+                    "include_urgent_in_pdf",
+                    "practitioner_name",
+                ):
+                    data[k] = parsed.get(k)
+                data["notes"] = parsed.get("notes")
+        except Exception:
+            pass
+    return data
+
+
 @router.post("/cases/{case_id}/review", response_model=ReviewOut, status_code=201)
 def review_case(case_id: UUID, body: ReviewIn, owner: Owner, store: Store) -> ReviewOut:
     case = _found(store.get_case(owner, str(case_id)), "Case")
@@ -538,12 +839,93 @@ def review_case(case_id: UUID, body: ReviewIn, owner: Owner, store: Store) -> Re
             status.HTTP_409_CONFLICT,
             "The case changed after its last analysis. Run the analysis again before signing off.",
         )
+    # Consent and archive state are checked at the moment of signing, not only at analysis.
+    _live_patient(store, owner, case["patient_id"])
+    if not store.has_active_consent(owner, case["patient_id"]):
+        raise HTTPException(status.HTTP_409_CONFLICT, "No active patient consent on record")
     analysis = _found(store.get_analysis(owner, str(body.analysis_id)), "Analysis")
     if analysis["case_id"] != str(case_id):
         raise HTTPException(404, "Analysis not found")
+    # Only the current analysis may be signed: an older one could lack later urgent findings.
+    latest = store.latest_analysis(owner, str(case_id))
+    if latest is None or str(latest["id"]) != str(analysis["id"]):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "There is a newer analysis of this case. Review the latest one before signing off.",
+        )
+
+    flags = analysis.get("red_flags") or []
+    if flags and not (body.urgency_disposition or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Record your clinical assessment and disposition of the urgent findings "
+            "before finalising",
+        )
+
     if body.decision != "rejected" and not (body.chosen_remedy or "").strip():
         raise HTTPException(422, "Name the remedy you chose, or reject the analysis")
-    row = store.save_review(owner, {**body.model_dump(mode="json"), "case_id": str(case_id)})
+    if body.decision != "rejected" and not (body.practitioner_name or "").strip():
+        raise HTTPException(422, "Enter the prescriber's name before finalising")
+
+    prescription_meta = {
+        "diagnosis": body.diagnosis,
+        "potency": body.potency,
+        "dose": body.dose,
+        "frequency": body.frequency,
+        "duration": body.duration,
+        "instructions": body.instructions,
+        "urgency_disposition": body.urgency_disposition,
+        "include_urgent_in_pdf": body.include_urgent_in_pdf,
+        "practitioner_name": (body.practitioner_name or "").strip() or None,
+        "notes": body.notes,
+    }
+    notes_payload = json.dumps(prescription_meta)
+
+    row = store.save_review(
+        owner,
+        {
+            "analysis_id": str(body.analysis_id),
+            "case_id": str(case_id),
+            "decision": body.decision,
+            "chosen_remedy": body.chosen_remedy,
+            "notes": notes_payload,
+        },
+    )
     store.update_case(owner, str(case_id), {"status": "signed_off"})
     store.audit(owner, "case.review", "case", str(case_id))
-    return ReviewOut(**row)
+    return ReviewOut(**_unpack_review_row(row))
+
+
+@router.get("/cases/{case_id}/review", response_model=ReviewOut)
+def get_case_review(case_id: UUID, owner: Owner, store: Store) -> ReviewOut:
+    _found(store.get_case(owner, str(case_id)), "Case")
+    reviews = store.list_reviews(owner, str(case_id))
+    if not reviews:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No review recorded for this case")
+    return ReviewOut(**_unpack_review_row(reviews[0]))
+
+
+@router.get("/cases/{case_id}/prescription/file")
+def prescription_file(case_id: UUID, owner: Owner, store: Store) -> Response:
+    case = _found(store.get_case(owner, str(case_id)), "Case")
+    reviews = store.list_reviews(owner, str(case_id))
+    if not reviews:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No finalised prescription for this case")
+    patient = _found(store.get_patient(owner, case["patient_id"]), "Patient")
+    review_data = _unpack_review_row(reviews[0])
+    try:
+        pdf_bytes = report_files.render_prescription_pdf(case, patient, review_data)
+    except Exception as exc:
+        logger.error("Prescription file failed: %s", type(exc).__name__)
+        raise HTTPException(500, "The prescription file could not be created.") from None
+    store.audit(owner, "case.prescription.download", "case", str(case_id))
+    ident = patient.get("identifier") or str(case_id)[:8]
+    safe_ident = re.sub(r"[^A-Za-z0-9-]+", "-", ident).strip("-")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="prescription-{safe_ident}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )

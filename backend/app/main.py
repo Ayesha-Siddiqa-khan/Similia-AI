@@ -14,12 +14,16 @@ from strawberry.fastapi import GraphQLRouter
 
 from app.api.routes.ai_settings import router as ai_settings_router
 from app.api.routes.cases import router as cases_router
+from app.api.routes.clinical_images import router as clinical_images_router
+from app.api.routes.clinical_workflow import router as clinical_workflow_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge import router as knowledge_router
 from app.api.routes.monitor import router as monitor_router
+from app.api.routes.speech import router as speech_router
 from app.core.config import get_settings
+from app.core.desktop_guard import DesktopTokenMiddleware
 from app.core.request_log import RequestLogMiddleware, configure_logging
-from app.core.startup import check_configuration
+from app.core.startup import check_configuration, is_production
 from app.graphql.schema import schema
 from app.services.case_db import CaseStoreError
 
@@ -27,15 +31,30 @@ from app.services.case_db import CaseStoreError
 @asynccontextmanager
 async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
     """Production refuses to start with an unsafe configuration; development only warns."""
-    check_configuration(get_settings())
-    yield
+    settings = get_settings()
+    check_configuration(settings)
+    worker = None
+    if settings.auto_resume_enabled and settings.supabase_url and settings.supabase_secret_key:
+        from app.ai.ingestion.auto import AutoResumeWorker
+        from app.api.routes.knowledge import get_auto_resume
+
+        worker = AutoResumeWorker(get_auto_resume(), settings.auto_resume_interval_seconds)
+        worker.start()
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
+        from app.services.speech.manager import get_speech_manager
+
+        get_speech_manager().shutdown()
 
 
 def create_app() -> FastAPI:
     """Build the FastAPI application with CORS and GraphQL mounted."""
     settings = get_settings()
     # The interactive API docs describe every endpoint; they are for development only.
-    production = settings.environment.strip().lower() == "production"
+    production = is_production(settings)
     configure_logging()
     application = FastAPI(
         lifespan=lifespan,
@@ -54,6 +73,8 @@ def create_app() -> FastAPI:
     )
 
     application.add_middleware(RequestLogMiddleware)
+    if settings.desktop_token:
+        application.add_middleware(DesktopTokenMiddleware, token=settings.desktop_token)
 
     @application.exception_handler(CaseStoreError)
     async def case_store_error(_request: Request, _exc: CaseStoreError) -> JSONResponse:
@@ -74,8 +95,11 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(ai_settings_router)
     application.include_router(cases_router)
+    application.include_router(clinical_workflow_router)
+    application.include_router(clinical_images_router)
     application.include_router(knowledge_router)
     application.include_router(monitor_router)
+    application.include_router(speech_router)
     application.include_router(GraphQLRouter(schema), prefix="/graphql")
     return application
 

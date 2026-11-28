@@ -14,6 +14,7 @@ from app.api.routes import ai_settings as settings_routes
 from app.api.routes import cases as cases_routes
 from app.core import vault
 from app.main import create_app
+from app.services.compatible_llm import CompatibleProviderError
 from app.services.user_ai import (
     KeyPausedError,
     KeyRejectedError,
@@ -41,7 +42,14 @@ class InMemoryAIStore:
         return dict(self.rows[owner]) if owner in self.rows else None
 
     def save(self, owner, row):
-        self.rows[owner] = {**row, "practitioner_id": owner}
+        self.rows[owner] = {**self.rows.get(owner, {}), **row, "practitioner_id": owner}
+
+    def update(self, owner, provider, changes):
+        row = self.rows.get(owner)
+        if not row or row["provider"] != provider:
+            return False
+        row.update(changes)
+        return True
 
     def delete(self, owner):
         self.rows.pop(owner, None)
@@ -69,7 +77,8 @@ def env(secret) -> Env:
     ai, audit, who = InMemoryAIStore(), InMemoryCaseStore(), {"id": "doctor-a"}
     verifier = {"result": None}  # None = accept; or an exception to raise
 
-    def verify(_key):
+    def verify(_key, provider):
+        verifier["provider"] = provider
         if verifier["result"] is not None:
             raise verifier["result"]
 
@@ -153,6 +162,78 @@ def test_model_can_change_without_re_entering_the_key(env: Env):
     assert vault.decrypt_secret(env.ai.rows["doctor-a"]["encrypted_api_key"]) == KEY_A
 
 
+def test_switching_providers_requires_its_own_key_and_preserves_failed_settings(env: Env):
+    save_key(env, KEY_A)
+    path = "/api/settings/ai"
+    options = {entry["id"] for entry in env.client.get(path).json()["providers"]}
+    assert options == {"anthropic", "openai", "gemini", "openrouter"}
+    selection = {"provider": "gemini", "model": "gemini-test-model"}
+    assert env.client.put(path, json=selection).status_code == 422
+    assert env.client.get(path).json()["provider"] == "anthropic"
+    invalid = env.client.put(path, json={**selection, "provider": "https://example.test"})
+    assert invalid.status_code == 422
+
+    new_key = "synthetic-gemini-key-123456"
+    response = env.client.put(path, json={**selection, "api_key": new_key})
+    assert response.status_code == 200 and response.json()["provider"] == "gemini"
+    assert new_key not in response.text and env.verifier["provider"] == "gemini"
+    llm = provider_for(env.ai.get("doctor-a"))
+    assert llm.model == "gemini-test-model" and llm._api_key == new_key
+
+
+def test_catalog_uses_only_a_key_for_the_requested_provider_and_never_saves_it(env, monkeypatch):
+    path = "/api/settings/ai/models"
+    save_key(env, KEY_A)
+    seen = []
+
+    def list_models(key, provider):
+        seen.append((key, provider))
+        return {"provider-chat-id": "Provider chat name"}
+
+    monkeypatch.setattr(settings_routes, "list_provider_models", list_models)
+    assert env.client.post(path, json={"provider": "gemini"}).status_code == 422
+    assert not seen
+    assert env.client.post(path, json={"provider": "anthropic"}).status_code == 200
+    new_key = "synthetic-gemini-key-123456"
+    response = env.client.post(path, json={"provider": "gemini", "api_key": new_key})
+    assert response.json() == [{"id": "provider-chat-id", "label": "Provider chat name"}]
+    assert seen == [(KEY_A, "anthropic"), (new_key, "gemini")]
+    assert env.ai.rows["doctor-a"]["provider"] == "anthropic"
+
+
+def test_diagnostics_separate_a_model_failure_from_working_semantic_search(env, monkeypatch):
+    save_key(env)
+    def fail(_self, text, language):
+        assert "blue notebook" in text and language == "en"
+        raise CompatibleProviderError(429)
+
+    def embed(text):
+        assert text == "blue notebook"
+        return [0.5]
+
+    monkeypatch.setattr(settings_routes.ClaudeReasoner, "normalise", fail)
+    monkeypatch.setattr(settings_routes, "embedding_paused", lambda: False)
+    monkeypatch.setattr(settings_routes, "get_settings", lambda: SimpleNamespace(
+        voyage_model="voyage-test", voyage_api_key="synthetic-voyage-key"
+    ))
+    monkeypatch.setattr(settings_routes, "get_embedding_provider", lambda **_: SimpleNamespace(
+        embed_query=embed
+    ))
+    monkeypatch.setattr(settings_routes, "get_supabase_admin_client", object)
+    monkeypatch.setattr(settings_routes.knowledge_db, "search_chunks", lambda *_a, **_kw: [])
+    result = env.client.post("/api/settings/ai/diagnostics").json()
+    assert [(row["service"], row["status"]) for row in result] == [
+        ("Anthropic", "failed"), ("Voyage", "passed"), ("Semantic source library", "passed"),
+    ]
+    assert result[0]["upstream_status"] == 429
+    assert not env.audit.analyses
+
+    monkeypatch.setattr(settings_routes, "embedding_paused", lambda: True)
+    monkeypatch.setattr(settings_routes, "get_embedding_provider", None)
+    paused = env.client.post("/api/settings/ai/diagnostics").json()
+    assert paused[1]["status"] == "skipped" and "paused" in paused[1]["detail"]
+
+
 def test_each_doctor_has_their_own_key_and_can_delete_it(env: Env):
     save_key(env, KEY_A, "claude-sonnet-5-5")
     env.as_user("doctor-b")
@@ -166,10 +247,10 @@ def test_each_doctor_has_their_own_key_and_can_delete_it(env: Env):
 
 def test_provider_for_uses_that_users_key_and_model(env: Env):
     save_key(env, KEY_A, "claude-haiku-5-5")
-    llm = provider_for("doctor-a", env.ai)
+    llm = provider_for(env.ai.get("doctor-a"))
     assert llm._api_key == KEY_A and llm._model == "claude-haiku-5-5"
     with pytest.raises(NoUserKeyError):
-        provider_for("doctor-b", env.ai)
+        provider_for(env.ai.get("doctor-b"))
 
 
 def test_ai_features_need_the_users_own_key_and_use_it(env: Env, monkeypatch):
@@ -257,7 +338,7 @@ def test_pause_now_stops_ai_immediately_and_keeps_the_key(env: Env):
     body = env.client.post("/api/settings/ai/deactivate").json()
     assert body["configured"] is True and body["active"] is False
     with pytest.raises(KeyPausedError):
-        provider_for("doctor-a", env.ai)
+        provider_for(env.ai.get("doctor-a"))
 
 
 def test_activate_and_pause_need_a_saved_key_and_are_per_doctor(env: Env):

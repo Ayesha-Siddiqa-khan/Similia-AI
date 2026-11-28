@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/backend";
-import type { BookIngestionOut, ChunkPage, EmbeddedFilter, EventOut, JobOut, JobStatus, OverviewOut, PlanOut, StartRequest, TextPreview } from "./types";
+import type { AutoRequest, AutoResult, BookIngestionOut, StopResult, ChunkPage, EmbeddedFilter, EventOut, JobOut, JobStatus, OverviewOut, PlanOut, StartRequest, TextPreview } from "./types";
 
 export const POLL_MS = 3000;
 export const CHUNKS_PER_PAGE = 20;
@@ -11,13 +11,21 @@ const noRetryOnAuth = (n: number, error: Error) => n < 1 && (!(error instanceof 
 const post = <T,>(path: string, body?: unknown) =>
   api<T>(path, body === undefined ? { method: "POST" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-/** All books with real index counts. Refreshes every 3 s while any job is pending or running. */
+export const OVERVIEW_FAST_MS = 5000;
+export const OVERVIEW_SLOW_MS = 30_000;
+/** 5 s while any book is running or stalled or an automatic queue exists, otherwise 30 s. */
+export function overviewInterval(data: OverviewOut | undefined): number {
+  const busy = data?.books.some((b) => b.state === "running" || b.state === "stalled" || b.auto_resume.enabled) || data?.active_jobs.some((j) => isLive(j.status));
+  return busy ? OVERVIEW_FAST_MS : OVERVIEW_SLOW_MS;
+}
+/** All books with real index counts and live status. Not refreshed while the tab is hidden. */
 export function useOverview() {
   return useQuery({
     queryKey: ["ingestion", "overview"],
     queryFn: ({ signal }) => api<OverviewOut>("ingestion/overview", { signal }),
     retry: noRetryOnAuth,
-    refetchInterval: (q) => (q.state.data?.active_jobs.some((j) => isLive(j.status)) ? POLL_MS : false),
+    refetchInterval: (q) => overviewInterval(q.state.data),
+    refetchIntervalInBackground: false,
   });
 }
 /** Plan, recent jobs and events of one book. Refreshes every 3 s while its job is pending or running. */
@@ -65,3 +73,7 @@ export const usePrepare = (bookId: string) => useIngestionMutation<void, PlanOut
 /** Spends paid tokens: callers must only pass confirmed: true from the confirmation dialog. */
 export const useStart = (bookId: string) => useIngestionMutation<StartRequest, JobOut>((body) => post<JobOut>(`books/${bookId}/ingest`, body));
 export const usePause = () => useIngestionMutation<string, JobOut>((jobId) => post<JobOut>(`ingestion-jobs/${jobId}/pause`));
+/** Spends paid tokens: only the automatic-resume confirmation dialog may call this, always with confirmed: true. */
+export const useStartAuto = () => useIngestionMutation<AutoRequest, AutoResult>((body) => post<AutoResult>("ingestion/auto", body));
+/** Omit book_ids to stop every automatic resume. A running job finishes its current batch first. */
+export const useStopAuto = () => useIngestionMutation<string[] | undefined, StopResult>((ids) => post<StopResult>("ingestion/auto/stop", { book_ids: ids }));

@@ -20,11 +20,15 @@ out/
 .playwright-mcp/
 graphify-out/
 reports/ingestion/
+# Generated fine-tuning datasets: local only, never committed
+datasets/
 
 # Python tooling
 .pytest_cache/
 .pytest_tmp*/
+.pytest_temp/
 .ruff_cache/
+backend/.runtime/
 .coverage
 
 # Logs & OS noise
@@ -42,3 +46,22 @@ commands.txt
 # Copyrighted source books and local copies of large assets
 pdfs books/
 /JameelNooriNastaleeq.ttf
+
+# Search-mode evaluation reports (derived from real case data: never commit)
+reports/evaluation/
+/backend/reports/
+
+# Generated PDF splits and other local build output
+/output/
+*.speech_settings.json
+.speech_settings.json
+
+# Desktop packaging (staged runtime and installer output are generated)
+desktop/node_modules/
+desktop/resources/
+desktop/.build/
+desktop/.cache/
+release/
+# `build/` above ignores every build folder; keep the checked-in app icon.
+!desktop/build/
+!desktop/build/icon.ico

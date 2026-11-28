@@ -1,4 +1,4 @@
-# Bring-your-own AI key (each doctor uses their own Anthropic key)
+# Bring-your-own AI key
 
 AI follow-up questions and case analysis run on **the signed-in doctor's own key and
 account**. There is no shared server AI key. A doctor with no key sees "Add your own AI key"
@@ -29,10 +29,13 @@ unreadable and doctors must enter their keys again.** Never commit it or paste i
 
 ### 2. Create the table (Supabase dashboard, SQL Editor)
 
-Run these two files **in this order**, each in a new query (copy the file, paste, Run):
+Run these files **in this order**, each in a new query (copy the file, paste, Run):
 
 1. `supabase/migrations/20261122140000_user_ai_settings.sql` (the table)
 2. `supabase/migrations/20261122150000_ai_key_active_until.sql` (the active period column)
+3. `supabase/migrations/20261124160000_ai_key_providers.sql` (provider choices)
+4. `supabase/migrations/20261124180000_hourly_analysis_limit.sql` (personal hourly analysis cap)
+5. `supabase/migrations/20261124210000_daily_analysis_limit.sql` (personal daily analysis cap)
 
 Check with:
 
@@ -45,15 +48,11 @@ where table_name = 'user_ai_settings' and column_name = 'active_until';
 Expect `rowsecurity = true` and one `active_until` row. The table has no policies, so browsers
 can never read it. Only the backend can.
 
-If the first file says "already exists", skip it and run only the second.
+On an existing installation, apply the migrations that have not been run yet.
 
-### 3. Restart the backend
+### 3. Local development
 
-```powershell
-cd "E:\github\Similia AI\backend"; uv run uvicorn app.main:app --reload
-```
-
-Then restart the frontend (`npm run dev`).
+Run `start-dev.bat` from the project folder. It uses backend port 8011 and starts any local service that is missing. Backend code changes reload automatically. If you change backend environment variables, restart that backend in its terminal. The open browser refreshes saved data after it reconnects.
 
 `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` in `backend/.env` are no longer used by the doctor
 workspace. They can stay empty.
@@ -61,14 +60,18 @@ workspace. They can stay empty.
 ## What each doctor does
 
 1. Sign in, open **AI Settings** in the sidebar.
-2. Create a key at console.anthropic.com (API Keys, Create key) and set a monthly spend limit.
-3. Paste it, choose a model and **how long to keep the key active** (1 day by default, 1 week
-   or 1 month), then click **Save and verify**.
-4. The app checks the key with Anthropic (a free request), stores it encrypted, and shows
-   only the last four characters from then on.
-5. Back in a case: **Suggest questions** and **Run analysis** now work.
+2. Select **Anthropic**, **OpenAI**, **Google Gemini**, or **OpenRouter** and create a key in that provider's developer console.
+3. Paste it and select a chat model from the provider's model list. Choose **how long to keep the
+   key active** (1 day by default, 1 week or 1 month), then click **Save and verify**.
+4. The app checks access to the provider's key or model catalogue endpoint, stores the key encrypted,
+   and shows its last four characters. Generation also requires model access and any credits or quota
+   set by the provider.
+5. The saved provider is used for **Suggest questions**, **Run analysis**, and Urdu report translation.
 
-Doctors can change the model without re-entering the key, replace the key, or remove it.
+Similia saves one provider key per doctor. Changing providers requires that provider's key and
+replaces the previously saved key. You can change the model for the same provider with the current key.
+For other model vendors, use an OpenRouter key and an OpenRouter model ID that supports JSON output
+and has an available endpoint that does not collect request data.
 
 ### Active period
 
@@ -83,7 +86,10 @@ Doctors can change the model without re-entering the key, replace the key, or re
 
 Each doctor is limited per hour (rolling 60 minutes) so a loop or stuck page cannot run up
 their bill. Defaults: 30 question requests and 10 case analyses per hour. When the limit is
-reached the app says how many minutes to wait. Change the limits in `backend/.env`:
+reached the app says how many minutes to wait. In **AI Settings → Your usage this hour**,
+enter a personal case-analysis limit, enter `0` to remove the hourly cap, or leave the field
+blank to use the server default. Daily and monthly case-analysis limits still apply.
+Administrators can change the defaults in `backend/.env`:
 
 ```
 AI_QUESTIONS_PER_HOUR=30
@@ -100,16 +106,14 @@ AI Settings under "Your usage this hour".
 - Keys are never written to logs or the audit log (audit rows record only "key saved/removed").
 - Each doctor can use only their own key; another doctor's account cannot read or use it.
 - Anyone with a doctor's key can spend that doctor's money. Tell doctors to use a dedicated
-  key with a spend limit, and to remove it here and in the Anthropic console if it leaks.
-- Case text is sent to Anthropic under the doctor's account terms. Only analyse patients who
-  have consented.
+  key with a spend limit, and to remove it here and in the provider's console if it leaks.
+- Case text is sent to the selected provider and, for OpenRouter, its model host. Only analyse
+  patients who have consented to that processing.
 
 ## Known follow-ups
 
 - `cryptography` is installed (via another package) but not declared in
   `backend/pyproject.toml`. Declaring it needs `uv lock`, which needs network access and your
   approval.
-- Limits are per doctor and per hour only. There is no daily or monthly cap and no way for an
-  administrator to set different limits for one doctor.
 - Two requests sent at the same instant can both pass the limit check, so a doctor may briefly
   exceed the limit by a small amount.

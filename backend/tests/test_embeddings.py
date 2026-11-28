@@ -103,3 +103,32 @@ def test_embed_query_returns_single_vector() -> None:
     provider = make_provider(stub)
     vector = provider.embed_query(" Which remedy? ")
     assert len(vector) == VOYAGE_DEFAULT_DIMENSION
+
+
+def test_query_preserves_the_provider_timeout_after_two_attempts() -> None:
+    stub = StubVoyageClient(fail_times=10, error_cls=error.Timeout)
+    sleeps: list[float] = []
+    provider = make_provider(stub, sleeps=sleeps)
+    with pytest.raises(error.Timeout):
+        provider.embed_query("fixture")
+    assert len(stub.calls) == 2
+    assert sleeps == [2.0]
+
+
+def test_query_does_not_retry_billing_or_an_extended_retry_window() -> None:
+    for failure in (
+        error.RateLimitError("quota exhausted", http_status=429),
+        error.RateLimitError("slow down", http_status=429, headers={"Retry-After": "60"}),
+    ):
+        calls = []
+
+        def embed(*_args, **_kwargs):
+            calls.append(True)
+            raise failure
+
+        provider = make_provider(StubVoyageClient())
+        provider._client = lambda: SimpleNamespace(embed=embed)
+        with pytest.raises(error.RateLimitError) as raised:
+            provider.embed_query("fixture")
+        assert raised.value.http_status == 429
+        assert len(calls) == 1

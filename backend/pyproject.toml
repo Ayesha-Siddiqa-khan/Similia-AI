@@ -3,6 +3,7 @@ name = "similia-backend"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=43.0.0",
     "fastapi>=0.162.0",
     "httpx>=0.28.1",
     "langchain>=1.4.7",
@@ -16,6 +17,8 @@ dependencies = [
     "pydantic-settings>=2.16.2",
     "pyjwt[crypto]>=2.15.1",
     "pymupdf>=2.0",
+    "pillow>=13.0.0",
+    "psutil>=7.0.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
     "strawberry-graphql[fastapi]>=0.339.0",
@@ -29,6 +32,13 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1",
     "ruff>=0.17.3",
+]
+# Bundled into the desktop build so the speech worker never needs a system Python.
+speech = [
+    "faster-whisper>=1.1.0",
+]
+packaging = [
+    "pyinstaller>=6.10.0",
 ]
 
 [tool.pytest.ini_options]

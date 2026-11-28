@@ -8,6 +8,10 @@ import type { NextConfig } from "next";
 // for hydration, so script-src keeps 'unsafe-inline' (a nonce policy would disable static pages);
 // 'unsafe-eval' and websockets are added in development only (hot reload).
 const dev = process.env.NODE_ENV !== "production";
+// The desktop shell serves the app over loopback HTTP. HSTS and
+// upgrade-insecure-requests would break asset loading there, so they are
+// omitted in desktop mode only.
+const desktop = process.env.SIMILIA_DESKTOP === "1";
 const supabaseOrigin = (() => {
   try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").origin; } catch { return ""; }
 })();
@@ -23,7 +27,7 @@ const contentSecurityPolicy = [
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-  ...(dev ? [] : ["upgrade-insecure-requests"]),
+  ...(dev || desktop ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");
 
 const securityHeaders = [
@@ -32,7 +36,7 @@ const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "microphone=(self), camera=(), geolocation=(), payment=()" },
-  ...(process.env.NODE_ENV === "production"
+  ...(process.env.NODE_ENV === "production" && !desktop
     ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" }]
     : []),
 ];
@@ -40,15 +44,22 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   /* config options here */
   poweredByHeader: false,
+  // The desktop build runs Next's own production server from the standalone
+  // output; it includes every runtime dependency the server needs.
+  output: "standalone",
+  ...(desktop ? { outputFileTracingRoot: process.cwd() } : {}),
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
   experimental: {
+    // Book uploads go through the proxy; the default 10 MB buffer cut them off (the app allows 50 MB).
+    proxyClientMaxBodySize: "55mb",
     agentUpgrade: "security",
   },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
+    ...(desktop ? { root: process.cwd() } : {}),
     rules: {
       "*.css": {
         loaders: ["@tailwindcss/turbopack"],

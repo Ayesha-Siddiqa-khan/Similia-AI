@@ -1,8 +1,10 @@
 @echo off
-rem Similia AI - start backend (FastAPI :8000) and frontend (Next.js :3000)
+rem Similia AI - start backend (FastAPI :8011) and frontend (Next.js :3000)
 rem Each app opens in its own window; close the window (or Ctrl+C) to stop it.
 setlocal
 set "ROOT=%~dp0"
+set "BACKEND_PORT=8011"
+set "API_BASE_URL=http://127.0.0.1:%BACKEND_PORT%"
 
 if not exist "%ROOT%backend\.venv" (
   echo [ERROR] Backend venv missing. Run first: cd backend ^&^& uv sync
@@ -15,15 +17,23 @@ if not exist "%ROOT%frontend\node_modules" (
   exit /b 1
 )
 
-netstat -ano | findstr /r ":3000 .*LISTENING" >nul && echo [WARN] Port 3000 already in use - a previous frontend may still be running.
-netstat -ano | findstr /r ":8000 .*LISTENING" >nul && echo [WARN] Port 8000 already in use - a previous backend may still be running.
+netstat -ano | findstr /r ":%BACKEND_PORT% .*LISTENING" >nul
+if errorlevel 1 (
+  start "Similia AI - Backend (FastAPI :%BACKEND_PORT%)" /D "%ROOT%backend" cmd /k "uv run --offline --locked --no-sync uvicorn app.main:app --host 127.0.0.1 --port %BACKEND_PORT% --reload --reload-dir app"
+) else (
+  echo [INFO] Backend port %BACKEND_PORT% is already in use. Skipping duplicate launch.
+)
 
-start "Similia AI - Backend (FastAPI :8000)" cmd /k "cd /d "%ROOT%backend" && uv run uvicorn app.main:app --reload"
-start "Similia AI - Frontend (Next.js :3000)" cmd /k "cd /d "%ROOT%frontend" && npm run dev"
+netstat -ano | findstr /r ":3000 .*LISTENING" >nul
+if errorlevel 1 (
+  start "Similia AI - Frontend (Next.js :3000)" /D "%ROOT%frontend" cmd /k "npm run dev"
+) else (
+  echo [INFO] Frontend port 3000 is already in use. Skipping duplicate launch.
+)
 
 echo.
 echo Similia AI starting:
-echo   Backend  - http://localhost:8000   (Swagger: http://localhost:8000/docs)
+echo   Backend  - http://127.0.0.1:%BACKEND_PORT%   (Swagger: http://127.0.0.1:%BACKEND_PORT%/docs)
 echo   Frontend - http://localhost:3000
 echo.
 echo Close this window any time; the apps keep running in their own windows.

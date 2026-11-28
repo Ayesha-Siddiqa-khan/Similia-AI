@@ -10,13 +10,25 @@ export async function fetchBackendHealth(): Promise<BackendHealth> {
   const started = Date.now();
   try {
     const response = await fetch(`${API_BASE_URL}/health`, {
+      headers: process.env.SIMILIA_DESKTOP_TOKEN
+        ? { "X-Similia-Desktop-Token": process.env.SIMILIA_DESKTOP_TOKEN }
+        : undefined,
       signal: AbortSignal.timeout(3000),
       cache: "no-store",
     });
     if (!response.ok) {
       return { backend: "down" };
     }
-    return { backend: "ok", latencyMs: Date.now() - started };
+    const body = await response.json().catch(() => null);
+    if (process.env.SIMILIA_DESKTOP_TOKEN && body?.status !== "ok") {
+      return { backend: "down" };
+    }
+    const instanceId = body?.instance_id;
+    return {
+      backend: "ok",
+      latencyMs: Date.now() - started,
+      ...(typeof instanceId === "string" ? { instanceId } : {}),
+    };
   } catch {
     return { backend: "down" };
   }

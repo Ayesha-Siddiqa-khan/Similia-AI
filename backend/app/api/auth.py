@@ -18,7 +18,11 @@ PRACTITIONER_ROLES = ("practitioner", *OPERATOR_ROLES)
 
 
 def _verified_user_id(
-    credentials: HTTPAuthorizationCredentials | None, roles: tuple[str, ...], denied: str
+    credentials: HTTPAuthorizationCredentials | None,
+    roles: tuple[str, ...],
+    denied: str,
+    *,
+    clinical_signing: bool = False,
 ) -> str:
     if credentials is None:
         raise HTTPException(401, "Sign in to continue")
@@ -30,6 +34,8 @@ def _verified_user_id(
         raise HTTPException(401, "Session could not be verified")
     if user.app_metadata.get("similia_role") not in roles:
         raise HTTPException(403, denied)
+    if clinical_signing and user.app_metadata.get("similia_clinical_signing") is not True:
+        raise HTTPException(403, "Clinical signing permission is required")
     return str(user.id)
 
 
@@ -45,4 +51,14 @@ def require_practitioner(
     """Return the verified user id of a practitioner (or operator/admin)."""
     return _verified_user_id(
         credentials, PRACTITIONER_ROLES, "A Similia practitioner role is required"
+    )
+
+
+def require_clinical_signer(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> str:
+    """Return the verified user id of a practitioner with clinical signing permission."""
+    return _verified_user_id(
+        credentials, PRACTITIONER_ROLES, "A Similia practitioner role is required",
+        clinical_signing=True,
     )

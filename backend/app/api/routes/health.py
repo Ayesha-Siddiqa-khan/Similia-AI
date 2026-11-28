@@ -1,5 +1,7 @@
 """FastAPI REST routes (health now; uploads and AI workflow endpoints later)."""
 
+from uuid import uuid4
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -11,6 +13,7 @@ from app.services.supabase import get_supabase_admin_client
 router = APIRouter(tags=["health"])
 
 APP_VERSION = "0.1.0"
+INSTANCE_ID = uuid4().hex
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -21,6 +24,7 @@ def health() -> HealthResponse:
         app=settings.app_name,
         status="ok",
         version=APP_VERSION,
+        instance_id=INSTANCE_ID if settings.environment.strip().lower() == "development" else None,
         environment=settings.environment,
         services=settings.provider_status(),
     )

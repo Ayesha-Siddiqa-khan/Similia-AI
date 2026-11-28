@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Loading } from "@/components/ui";
@@ -7,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 const valid = ["dashboard", "knowledge", "books", "ingestion", "chunks", "search", "case", "patients", "ai", "settings"];
 const practitionerSections = ["case", "patients", "ai"];
 async function Section({ params }: { params: Promise<{ section: string }> }) {
+  await connection(); // render per request: these screens read the clock (TanStack Query) and live data
   const { section } = await params;
   if (!valid.includes(section)) notFound();
   if (!practitionerSections.includes(section)) {

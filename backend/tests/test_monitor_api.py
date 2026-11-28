@@ -137,4 +137,8 @@ def test_missing_reports_return_unavailable(tmp_path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(monitor, "REPORTS", tmp_path)
     app = create_app()
     app.dependency_overrides[require_operator] = lambda: "fixture-operator"
-    assert TestClient(app).get("/api/monitor/snapshot").status_code == 503
+    response = TestClient(app).get("/api/monitor/snapshot")
+    assert response.status_code == 200
+    assert response.json()["status"] == "not_configured"
+    assert response.json()["books"] == []
+    assert response.json()["capabilities"]["start"] is False

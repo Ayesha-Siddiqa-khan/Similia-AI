@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.ai.rag.case_analysis import ClaudeReasoner, NormalisedCase
 from app.ai.rag.case_questions import ClaudeQuestionWriter, FollowUps
+from app.api.routes import cases as cases_routes
 from app.services import ai_limits
 from tests.test_ai_settings import Env, env, save_key, secret  # noqa: F401
 from tests.test_cases_api import InMemoryCaseStore
@@ -126,6 +128,70 @@ def test_settings_endpoint_reports_usage(env: Env, monkeypatch):
     assert usage["analyses"] == {"used": 0, "limit": 2} and usage["window_minutes"] == 60
 
 
+def test_saved_hourly_limit_applies_to_reruns_and_can_be_reset(env: Env, monkeypatch):
+    monkeypatch.setattr(cases_routes, "get_supabase_admin_client", object)
+    monkeypatch.setattr(cases_routes, "embedding_paused", lambda: True)
+    monkeypatch.setattr(ClaudeReasoner, "normalise", lambda *_: NormalisedCase())
+    save_key(env)
+    case_id = make_case_for(env)
+    analyze = f"/api/cases/{case_id}/analyze?search_mode=keyword"
+    settings = "/api/settings/ai/analysis-limit"
+
+    for _ in range(2):
+        assert env.client.post(analyze).status_code == 201
+    assert env.client.post(analyze).status_code == 429
+
+    def set_limit(value):
+        return env.client.put(settings, json={"hourly_analysis_limit": value})
+
+    assert set_limit(-1).status_code == 422
+    assert set_limit(3).json()["usage"]["analyses"] == {"used": 2, "limit": 3}
+    assert env.client.post(analyze + "&acknowledge_red_flags=true").status_code == 201
+    assert env.client.post(analyze).status_code == 429
+    assert set_limit(0).json()["usage"]["analyses"]["limit"] == 0
+    assert env.client.post(analyze).status_code == 201
+    save_key(env)  # Key replacement preserves the separate limit column.
+    assert env.client.get("/api/settings/ai").json()["hourly_analysis_limit"] == 0
+    assert set_limit(None).json()["usage"]["analyses"]["limit"] == 2
+    assert env.client.post(analyze).status_code == 429
+
+    env.as_user("doctor-b")
+    assert env.client.get("/api/settings/ai").json()["usage"]["analyses"]["limit"] == 2
+
+
+def test_daily_override_can_be_raised_lowered_and_reset_without_resetting_usage(env, monkeypatch):
+    monkeypatch.setattr(cases_routes, "get_supabase_admin_client", object)
+    monkeypatch.setattr(cases_routes, "embedding_paused", lambda: True)
+    monkeypatch.setattr(ClaudeReasoner, "normalise", lambda *_: NormalisedCase())
+    save_key(env)
+    case_id = make_case_for(env)
+    analyze = f"/api/cases/{case_id}/analyze?search_mode=keyword"
+    settings = "/api/settings/ai/analysis-limit"
+
+    def set_daily(value):
+        return env.client.put(settings, json={"daily_analysis_limit": value})
+
+    assert env.client.put(settings, json={"hourly_analysis_limit": 0}).status_code == 200
+    assert set_daily(-1).status_code == 422
+    assert set_daily(1).json()["usage"]["daily_analyses"] == {"used": 0, "limit": 1}
+    assert env.client.post(analyze).status_code == 201
+    limited = env.client.post(analyze)
+    assert limited.status_code == 429 and "1 case analysis per day" in limited.json()["detail"]
+    assert set_daily(3).json()["usage"]["daily_analyses"] == {"used": 1, "limit": 3}
+    assert env.client.post(analyze + "&acknowledge_red_flags=true").status_code == 201
+    lowered = set_daily(1).json()
+    assert lowered["hourly_analysis_limit"] == 0
+    assert lowered["usage"]["daily_analyses"] == {"used": 2, "limit": 1}
+    assert env.client.post(analyze).status_code == 429
+    save_key(env)
+    assert env.client.get("/api/settings/ai").json()["daily_analysis_limit"] == 1
+    assert set_daily(0).json()["usage"]["daily_analyses"] == {"used": 2, "limit": 0}
+    assert env.client.post(analyze).status_code == 201
+    assert set_daily(None).json()["daily_analysis_limit"] is None
+    env.as_user("doctor-b")
+    assert env.client.get("/api/settings/ai").json()["daily_analysis_limit"] is None
+
+
 def test_daily_and_monthly_ceilings_stop_a_doctor_who_stays_under_the_hourly_limit(monkeypatch):
     monkeypatch.setattr(
         ai_limits,
@@ -149,7 +215,7 @@ def test_daily_and_monthly_ceilings_stop_a_doctor_who_stays_under_the_hourly_lim
     for days in (25, 15, 8, 2):
         log(store, "a", "case.analyze", days * 24 * 60)
     with pytest.raises(ai_limits.RateLimitedError) as month:
-        ai_limits.enforce(store, "a", "analyses", now=NOW)
+        ai_limits.enforce(store, "a", "analyses", now=NOW, hourly_analysis_limit=0)
     assert month.value.window == "month" and "per month" in month.value.message
     assert "hours" in month.value.message
     ai_limits.enforce(store, "b", "analyses", now=NOW)  # other doctors are unaffected

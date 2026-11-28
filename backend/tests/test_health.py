@@ -2,6 +2,8 @@
 
 from fastapi.testclient import TestClient
 
+from app.api.routes.health import INSTANCE_ID
+from app.core.config import get_settings
 from app.main import create_app
 
 client = TestClient(create_app())
@@ -14,6 +16,12 @@ def test_health_returns_ok() -> None:
     assert body["status"] == "ok"
     assert body["app"] == "Similia AI API"
     assert body["version"] == "0.1.0"
+
+
+def test_development_process_id_is_stable() -> None:
+    expected = INSTANCE_ID if get_settings().environment.strip().lower() == "development" else None
+    assert client.get("/health").json()["instance_id"] == expected
+    assert client.get("/health").json()["instance_id"] == expected
 
 
 def test_health_reports_provider_status_without_secrets() -> None:

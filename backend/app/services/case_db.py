@@ -5,8 +5,14 @@ here filters on `practitioner_id` (the verified caller). A row owned by another
 practitioner is indistinguishable from a missing row (returns None / 0 rows).
 """
 
+from base64 import b64encode
 from datetime import datetime, timezone
 from typing import Any, Protocol
+
+from postgrest import APIError
+
+from app.services.clinical_images import image_path
+from app.services.clinical_workflow import BUCKET, FINDINGS, IMAGE_CONSENTS, ClinicalStore
 
 CONSENT_TEXT_VERSION = "2026-11-v1"
 
@@ -188,6 +194,27 @@ class SupabaseCaseStore:
         return len(rows)
 
     def delete_patient(self, owner: str, patient_id: str) -> bool:
+        cases = self.list_cases(owner, patient_id)
+        if cases and "clinical_revision" in cases[0]:
+            clinical = ClinicalStore(self._db, owner)
+            try:
+                self._db.rpc("begin_clinical_patient_erasure", {
+                    "owner_id": owner, "patient_key": patient_id,
+                }).execute()
+                photos = clinical.images([case["id"] for case in cases], active=False)
+                if any(photo["state"] == "uploading" for photo in photos):
+                    raise CaseStoreError("An unfinished clinical photo upload needs resolution")
+                bucket = self._db.storage.from_(BUCKET)
+                for photo in photos:
+                    bucket.remove([
+                        image_path(owner, patient_id, photo["case_id"], photo["id"], variant)
+                        for variant in ("full", "thumb")
+                    ])
+            except CaseStoreError:
+                raise
+            except Exception:
+                raise CaseStoreError("Private clinical photo erasure failed. Retry erasure.") \
+                    from None
         rows = _run(
             "delete_patient",
             lambda: (
@@ -198,6 +225,41 @@ class SupabaseCaseStore:
             ),
         ).data
         return bool(rows)
+
+    def export_clinical(self, owner: str, patient_id: str, case_ids: list[str]) -> dict:
+        if not case_ids:
+            return {}
+        clinical = ClinicalStore(self._db, owner)
+        try:
+            consents = clinical.query(IMAGE_CONSENTS).eq("patient_id", patient_id).execute().data
+        except APIError as error:
+            if error.code in {"42P01", "PGRST205"}:
+                return {}  # The additive migration can be applied after deploying the code.
+            raise CaseStoreError("Clinical photo consent export failed") from None
+        photos = clinical.images(case_ids, active=False)
+        bucket = self._db.storage.from_(BUCKET)
+        originals = []
+        for photo in photos:
+            path = image_path(owner, patient_id, photo["case_id"], photo["id"], "full")
+            try:
+                data = bucket.download(path)
+            except Exception as error:
+                code = str(getattr(error, "status", "")) or str(getattr(error, "status_code", ""))
+                if photo["state"] == "active" or code not in {"404", "not_found"}:
+                    raise CaseStoreError("Private clinical photo export failed") from None
+                data = None
+            originals.append({
+                **photo,
+                "jpeg_base64": b64encode(data).decode("ascii") if data is not None else None,
+            })
+        return {
+            "clinical_image_consents": consents,
+            "clinical_images": originals,
+            "clinical_image_findings": clinical.query(FINDINGS).in_(
+                "case_id", case_ids,
+            ).execute().data,
+            "clinical_reports": [report for key in case_ids for report in clinical.reports(key)],
+        }
 
     # -- cases --------------------------------------------------------------
 
@@ -342,18 +404,26 @@ class SupabaseCaseStore:
         ).data[0]
 
     def recent_actions(self, owner: str, actions: tuple[str, ...], since: str) -> list[str]:
-        rows = _run(
-            "recent_actions",
-            lambda: (
-                self._db.table("audit_log")
-                .select("created_at")
-                .eq("practitioner_id", owner)
-                .in_("action", list(actions))
-                .gte("created_at", since)
-                .order("created_at")
-            ),
-        ).data
-        return [row["created_at"] for row in rows]
+        timestamps: list[str] = []
+        page_size = 500
+        while True:
+            start = len(timestamps)
+            rows = _run(
+                "recent_actions",
+                lambda: (
+                    self._db.table("audit_log")
+                    .select("created_at")
+                    .eq("practitioner_id", owner)
+                    .in_("action", list(actions))
+                    .gte("created_at", since)
+                    .order("created_at")
+                    .order("id")
+                    .range(start, start + page_size - 1)
+                ),
+            ).data
+            timestamps.extend(row["created_at"] for row in rows)
+            if len(rows) < page_size:
+                return timestamps
 
     def audit(self, owner: str, action: str, entity: str, entity_id: str | None) -> None:
         _run(

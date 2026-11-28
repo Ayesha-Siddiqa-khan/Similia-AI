@@ -5,8 +5,8 @@ import { AnalysisView } from "./analysis-view";
 import { CasePage } from "./case-page";
 import { PatientsPage } from "./patients";
 import { SymptomEditor } from "./symptom-editor";
-import { fixtureAiSettings, fixtureAnalysis } from "@/test/fixtures/cases-fixtures";
-import type { CaseRecord, Symptom } from "./types";
+import { fixtureAiSettings, fixtureAnalysis, fixturePatient } from "@/test/fixtures/cases-fixtures";
+import type { Analysis, CaseRecord, Symptom } from "./types";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -47,7 +47,7 @@ describe("analysis view", () => {
   const props = { caseId: "c1", status: "analyzed" as const, onAcknowledge: vi.fn(), acknowledging: false };
   it("shows cited sources for each remedy and the disclaimer", () => {
     mount(<AnalysisView analysis={fixtureAnalysis} {...props} />);
-    expect(screen.getByText(/Demonstration remedy A/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Demonstration remedy A/)[0]).toBeInTheDocument();
     expect(screen.getByText("Source chunk: demo-chunk-1")).toBeInTheDocument();
     expect(screen.getByText(/not clinical evidence/)).toBeInTheDocument();
   });
@@ -108,6 +108,28 @@ import { ApiErrorNotice } from "./api-error-notice";
 import { ApiError } from "@/lib/backend";
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 describe("AI settings", () => {
+  it("switches to Gemini with a separate key and model ID", async () => {
+    const existing = { ...fixtureAiSettings, configured: true, key_last4: "WXYZ" };
+    const saved = { ...existing, provider: "gemini", model: "gemini-example", key_last4: "3456" };
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/models")) return json([{ id: "gemini-example", label: "Gemini Example" }]);
+      return json(init?.method === "PUT" ? saved : existing);
+    });
+    vi.stubGlobal("fetch", fetch);
+    mount(<AiSettingsPage />);
+    const provider = await screen.findByLabelText("Provider");
+    expect(screen.getByRole("option", { name: "OpenAI" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "OpenRouter" })).toBeInTheDocument();
+    fireEvent.change(provider, { target: { value: "gemini" } });
+    expect(screen.getByRole("button", { name: "Update model" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "synthetic-provider-key-123456" } });
+    await screen.findByRole("option", { name: "Gemini Example (gemini-example)" });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gemini-example" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and verify" }));
+    expect(await screen.findByText(/Google Gemini key ending in 3456/)).toBeInTheDocument();
+    const submission = fetch.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(JSON.parse(String(submission?.[1]?.body))).toMatchObject({ provider: "gemini", model: "gemini-example" });
+  });
   it("saves a key, clears the field and never shows the key back", async () => {
     const saved = { ...fixtureAiSettings, configured: true, key_last4: "WXYZ", validated_at: "2026-11-22T10:00:00Z" };
     const fetch = vi.fn().mockResolvedValueOnce(json(fixtureAiSettings)).mockResolvedValueOnce(json(saved));
@@ -193,6 +215,8 @@ describe("AI key active period and usage", () => {
     vi.stubGlobal("fetch", fetch);
     mount(<AiSettingsPage />);
     expect(await screen.findByText(/Active until/)).toBeInTheDocument();
+    expect(screen.getByText("Enabled in Similia")).toBeInTheDocument();
+    expect(screen.getByText(/Anthropic checks API billing and available credits/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Pause now" }));
     expect(await screen.findByText("Paused")).toBeInTheDocument();
     expect(String(fetch.mock.calls[1][0])).toBe("/api/backend/settings/ai/deactivate");
@@ -202,6 +226,51 @@ describe("AI key active period and usage", () => {
     mount(<AiSettingsPage />);
     expect(await screen.findByText("4 of 30")).toBeInTheDocument();
     expect(screen.getByText("1 of 10")).toBeInTheDocument();
+  });
+  it("saves and clears a personal hourly analysis cap", async () => {
+    const settings = { ...active, hourly_analysis_limit: null };
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== "PUT") return json(settings);
+      const { hourly_analysis_limit } = JSON.parse(String(init.body));
+      return json({ ...settings, hourly_analysis_limit, usage: {
+        ...settings.usage, analyses: { used: 10, limit: hourly_analysis_limit ?? 10 },
+      } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    mount(<AiSettingsPage />);
+    const limit = await screen.findByLabelText("Hourly case analysis limit");
+    const save = () => screen.getByRole("button", { name: "Save hourly limit" });
+    expect(save()).toBeDisabled();
+    fireEvent.change(limit, { target: { value: "0" } });
+    fireEvent.click(save());
+    expect(await screen.findByText(/10 · No hourly cap/)).toBeInTheDocument();
+    fireEvent.change(limit, { target: { value: "" } });
+    fireEvent.click(save());
+    expect(await screen.findByText("10 of 10")).toBeInTheDocument();
+    const writes = fetch.mock.calls.filter(([, init]) => init?.method === "PUT");
+    expect(writes.map(([url]) => url)).toEqual(Array(2).fill("/api/backend/settings/ai/analysis-limit"));
+    expect(writes.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { hourly_analysis_limit: 0 }, { hourly_analysis_limit: null },
+    ]);
+  });
+  it("saves a daily analysis cap without changing the hourly cap", async () => {
+    const settings = { ...active, hourly_analysis_limit: 15, daily_analysis_limit: null, usage: {
+      ...active.usage, daily_analyses: { used: 40, limit: 40 },
+    } };
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== "PUT") return json(settings);
+      expect(JSON.parse(String(init.body))).toEqual({ daily_analysis_limit: 70 });
+      return json({ ...settings, daily_analysis_limit: 70, usage: {
+        ...settings.usage, daily_analyses: { used: 40, limit: 70 },
+      } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    mount(<AiSettingsPage />);
+    expect(await screen.findByText("40 of 40")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Daily case analysis limit"), { target: { value: "70" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save daily limit" }));
+    expect(await screen.findByText("40 of 70")).toBeInTheDocument();
+    expect(screen.getByLabelText("Hourly case analysis limit")).toHaveValue(15);
   });
   it("points a paused-key error to AI Settings", () => {
     mount(<ApiErrorNotice error={new ApiError("Your AI key is paused. Turn it on again in AI Settings to continue", 428)} />);
@@ -608,11 +677,182 @@ describe("an analysis that no longer matches the case", () => {
   it("is flagged out of date and cannot be signed off until it is run again", () => {
     mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="draft" />);
     expect(screen.getByText(/out of date/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Sign off case" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save & Finalise Prescription|Sign off case/i })).toBeNull();
   });
   it("offers sign-off when the analysis is current", () => {
     mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="analyzed" />);
-    expect(screen.getByRole("button", { name: "Sign off case" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save & Finalise Prescription|Sign off case/i })).toBeInTheDocument();
     expect(screen.queryByText(/out of date/)).toBeNull();
+  });
+});
+
+describe("practitioner-owned prescription workflow", () => {
+  const props = { caseId: "c1", onAcknowledge: vi.fn(), acknowledging: false };
+  const patient = fixturePatient;
+
+  it("starts every prescription field empty: nothing clinical is filled in for the practitioner", () => {
+    mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="analyzed" patient={patient} />);
+    expect(screen.getByText("Prescription & Clinical Decision")).toBeInTheDocument();
+    for (const label of [/Diagnosis \/ Clinical Impression/i, /Remedy Chosen/i, /Potency/i, /^Dose$/i, /Frequency/i, /Duration/i, /Patient Instructions & Advice/i, /Prescriber's name/i]) {
+      expect(screen.getByLabelText(label)).toHaveValue("");
+    }
+    expect(screen.queryByRole("button", { name: /Use AI Suggestion|^Insert$/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save & Finalise Prescription" })).toBeDisabled();
+  });
+
+  it("needs the remedy and the prescriber's name before it can be finalised", () => {
+    mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="analyzed" patient={patient} />);
+    const save = screen.getByRole("button", { name: "Save & Finalise Prescription" });
+    fireEvent.change(screen.getByLabelText(/Remedy Chosen/i), { target: { value: "Sulphur" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Prescriber's name/i), { target: { value: "Dr A. Example" } });
+    expect(save).not.toBeDisabled();
+  });
+
+  it("submits the finalized prescription directly to the review endpoint without external approval", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/cases/c1/review") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        return json({
+          id: "rev-1",
+          practitioner_id: "doc-1",
+          analysis_id: "a1",
+          case_id: "c1",
+          decision: body.decision,
+          chosen_remedy: body.chosen_remedy,
+          diagnosis: body.diagnosis,
+          potency: body.potency,
+          dose: body.dose,
+          frequency: body.frequency,
+          duration: body.duration,
+          instructions: body.instructions,
+          urgency_disposition: body.urgency_disposition,
+          notes: body.notes,
+          signed_at: "2026-11-24T10:00:00Z",
+        });
+      }
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="analyzed" patient={patient} />);
+
+    fireEvent.change(screen.getByLabelText(/Remedy Chosen/i), { target: { value: "Demonstration remedy A" } });
+    fireEvent.change(screen.getByLabelText(/Prescriber's name/i), { target: { value: "Dr A. Example" } });
+    fireEvent.change(screen.getByLabelText(/Diagnosis \/ Clinical Impression/i), {
+      target: { value: "Migraine without aura (Verified)" },
+    });
+    fireEvent.change(screen.getByLabelText(/Potency/i), {
+      target: { value: "200C" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Finalise Prescription" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url, init]) => {
+          if (!String(url).endsWith("/cases/c1/review") || init?.method !== "POST") return false;
+          const body = JSON.parse(init.body as string);
+          return (
+            body.decision === "accepted" &&
+            body.chosen_remedy === "Demonstration remedy A" &&
+            body.diagnosis === "Migraine without aura (Verified)" &&
+            body.potency === "200C" &&
+            body.dose === null && body.frequency === null && body.duration === null && body.instructions === null &&
+            body.practitioner_name === "Dr A. Example"
+          );
+        })
+      ).toBe(true);
+    });
+  });
+
+  it("requires urgency disposition when red flags are present", () => {
+    const analysisWithFlags: Analysis = {
+      ...fixtureAnalysis,
+      outcome: "ranked",
+      red_flags: ["Sudden severe headache with neurological signs"],
+    };
+    mount(
+      <AnalysisView
+        analysis={analysisWithFlags}
+        {...props}
+        status="analyzed"
+        patient={patient}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText(/Remedy Chosen/i), { target: { value: "Sulphur" } });
+    fireEvent.change(screen.getByLabelText(/Prescriber's name/i), { target: { value: "Dr A. Example" } });
+    expect(screen.getByLabelText(/Urgent Findings Assessment & Disposition \*/i)).toBeInTheDocument();
+    // Save button should be disabled when urgency disposition is empty
+    expect(screen.getByRole("button", { name: "Save & Finalise Prescription" })).toBeDisabled();
+
+    // Fill in urgency disposition
+    fireEvent.change(screen.getByLabelText(/Urgent Findings Assessment & Disposition \*/i), {
+      target: { value: "Emergency referral arranged via local hospital ED." },
+    });
+    expect(screen.getByRole("button", { name: "Save & Finalise Prescription" })).not.toBeDisabled();
+  });
+
+  it("offers no ready-made text for the urgent assessment or the notes", () => {
+    const analysisWithFlags: Analysis = { ...fixtureAnalysis, outcome: "ranked", red_flags: ["Sudden severe headache with neurological signs"] };
+    mount(<AnalysisView analysis={analysisWithFlags} {...props} status="analyzed" patient={patient} />);
+    expect(screen.queryByRole("button", { name: /Use AI Suggestion|^Insert$/i })).toBeNull();
+    expect(screen.queryByText(/AI Suggested draft/i)).toBeNull();
+    expect(screen.getByLabelText(/Urgent Findings Assessment & Disposition \*/i)).toHaveValue("");
+    expect(screen.getByLabelText(/Internal Doctor's Notes/i)).toHaveValue("");
+  });
+
+  it("says Not recorded on the signed card instead of showing a default", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).endsWith("/cases/c1/review")
+      ? json({ id: "rev-2", analysis_id: "a1", case_id: "c1", decision: "accepted", chosen_remedy: "Sulphur", signed_at: "2026-11-24T10:00:00Z" })
+      : json({})));
+    mount(<AnalysisView analysis={fixtureAnalysis} {...props} status="signed_off" patient={patient} />);
+    expect(await screen.findByText("Sulphur")).toBeInTheDocument();
+    expect(screen.getAllByText("Not recorded")).toHaveLength(5);
+    expect(screen.queryByText(/30C|4 pills|Twice daily|7 days/)).toBeNull();
+  });
+
+  it("displays the finalised prescription card and separate report link when signed off", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/cases/c1/review")) {
+        return json({
+          id: "rev-1",
+          practitioner_id: "doc-1",
+          analysis_id: "a1",
+          case_id: "c1",
+          decision: "accepted",
+          chosen_remedy: "Belladonna",
+          diagnosis: "Acute fever with congestion",
+          potency: "30C",
+          dose: "4 pills",
+          frequency: "Twice daily",
+          duration: "5 days",
+          instructions: "Avoid strong odors.",
+          signed_at: "2026-11-24T10:00:00Z",
+        });
+      }
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mount(
+      <AnalysisView
+        analysis={fixtureAnalysis}
+        {...props}
+        status="signed_off"
+        patient={patient}
+      />
+    );
+
+    expect(await screen.findByText("Finalised Prescription")).toBeInTheDocument();
+    expect(await screen.findByText("Belladonna")).toBeInTheDocument();
+    expect(screen.getByText("Acute fever with congestion")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download Prescription PDF/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Detailed RAG Analysis Report/i })).toHaveAttribute(
+      "href",
+      "/workspace/report/c1"
+    );
   });
 });

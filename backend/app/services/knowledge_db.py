@@ -7,6 +7,7 @@ backend is the only trusted write path.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,11 +29,54 @@ class KnowledgeDBError(RuntimeError):
     """A knowledge-base database operation failed."""
 
 
-def _execute(operation: str, fn: "callable") -> Any:
-    try:
-        return fn().execute()
-    except Exception as exc:  # postgrest raises APIError subclasses
-        raise KnowledgeDBError(f"{operation} failed: {exc}") from exc
+# Brief network drops ("Server disconnected") are retried for operations that are safe to repeat:
+# reads, and writes that set the same values again. Creating rows is NOT retried (a repeat could
+# duplicate a row), so the caller sees the error.
+RETRY_PREFIXES = (
+    "get_",
+    "list_",
+    "search_",
+    "keyword_search",
+    "book_stats",
+    "budget_tokens_used",
+    "chunks_needing",
+    "apply_chunk_embeddings",
+    "update_ingestion_job",
+    "update_book_metadata",
+)
+TRANSIENT_MARKERS = (
+    "server disconnected",
+    "connection reset",
+    "connection aborted",
+    "remoteprotocolerror",
+    "readerror",
+    "connecterror",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+)
+RETRY_WAITS = (0.5, 1.5, 4.0)  # seconds before the 2nd, 3rd and 4th attempt
+
+
+def _is_transient(exc: Exception) -> bool:
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
+def _execute(operation: str, fn: "callable", sleep: "callable" = time.sleep) -> Any:
+    waits = RETRY_WAITS if operation.startswith(RETRY_PREFIXES) else ()
+    for attempt in range(len(waits) + 1):
+        try:
+            return fn().execute()
+        except Exception as exc:  # postgrest raises APIError subclasses
+            if attempt < len(waits) and _is_transient(exc):
+                logger.warning(
+                    "%s: brief database error (%s); retrying", operation, type(exc).__name__
+                )
+                sleep(waits[attempt])
+                continue
+            raise KnowledgeDBError(f"{operation} failed: {exc}") from exc
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -360,4 +404,17 @@ def set_system_flag(client: Any, key: str, *, paused: bool, reason: str | None, 
                 "set_by": by,
             }
         ),
+    )
+
+
+def update_book_metadata(client: Any, book_id: str, patch: dict[str, Any]) -> None:
+    """Merge keys into the book's metadata (read, merge, write)."""
+    rows = _execute(
+        "update_book_metadata",
+        lambda: client.table("knowledge_books").select("metadata").eq("id", book_id),
+    ).data
+    merged = {**((rows[0].get("metadata") if rows else None) or {}), **patch}
+    _execute(
+        "update_book_metadata",
+        lambda: client.table("knowledge_books").update({"metadata": merged}).eq("id", book_id),
     )

@@ -1,0 +1,13 @@
+{
+  "name": "similia-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Similia AI monorepo helper scripts (frontend, backend, desktop packaging)",
+  "scripts": {
+    "desktop:dev": "node desktop/scripts/dev.mjs",
+    "desktop:build": "node desktop/scripts/build.mjs",
+    "dist:win": "node desktop/scripts/dist-win.mjs",
+    "desktop:test": "node --test desktop/tests/*.test.mjs",
+    "desktop:smoke": "node desktop/scripts/smoke.mjs"
+  }
+}

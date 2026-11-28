@@ -8,5 +8,6 @@ export function isPractitioner(metadata: Record<string, unknown> | undefined): b
 }
 
 export function sameOrigin(request: Request): boolean {
-  return request.headers.get("origin") === new URL(request.url).origin;
+  const expectedOrigin = process.env.SIMILIA_DESKTOP_ORIGIN ?? new URL(request.url).origin;
+  return request.headers.get("origin") === expectedOrigin;
 }

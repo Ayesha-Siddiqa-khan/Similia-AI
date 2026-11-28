@@ -6,6 +6,7 @@ Secrets come from .env locally and from the deployment environment in production
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     # Comma-separated list, e.g. "http://localhost:3000,http://localhost:3001"
     cors_origins: str = "http://localhost:3000"
+    # Set by the desktop launcher; when present, API/GraphQL calls must carry this token.
+    desktop_token: str = Field(
+        default="", validation_alias=AliasChoices("SIMILIA_DESKTOP_TOKEN", "desktop_token")
+    )
 
     # Supabase (never expose secret/service-role keys to the frontend)
     supabase_url: str = ""
@@ -34,6 +39,8 @@ class Settings(BaseSettings):
     app_encryption_key: str = ""
     # Older keys, comma separated, still accepted for decryption while rotating the key above.
     app_encryption_key_previous: str = ""
+    # Folder holding JameelNooriNastaleeq.ttf for Urdu PDFs (default: the web app's fonts folder).
+    urdu_font_dir: str = ""
 
     # Hourly AI request limits per practitioner (they pay for their own key; this stops runaways).
     ai_questions_per_hour: int = 30
@@ -50,12 +57,22 @@ class Settings(BaseSettings):
     embedding_budget_tokens: int = 500_000  # total across all website ingestion jobs
     embedding_batch_tokens: int = 3_000  # largest single request
     embedding_requests_per_minute: int = 3  # 0 = do not pace requests
+    embedding_tokens_per_minute: int = 10_000  # set to the verified account limit
+    embedding_budget_path: str = ""  # optional shared local SQLite path for backend workers
+    embedding_query_wait_seconds: float = 15
+    rag_primary_queries: int = 4
+    rag_follow_up_queries: int = 1
+    # Automatic resume of chosen books (a background worker in the API process).
+    auto_resume_enabled: bool = True
+    auto_resume_interval_seconds: int = 10
     # Search results below this similarity are not used as evidence in case analysis.
     rag_min_similarity: float = 0.25
 
     # Embeddings
     voyage_api_key: str = ""
     voyage_model: str = "voyage-4-lite"
+    clinical_workflow_enabled: bool = False
+    clinical_gemini_vision_models: str = ""
     max_run_embedding_tokens: int = 200_000
 
     # LangSmith (tracing disabled by default)

@@ -1,0 +1,57 @@
+appId: com.similia.ai
+productName: Similia AI
+copyright: Copyright © 2026 Similia AI
+
+directories:
+  output: ../release
+  buildResources: build
+
+# Only the shell itself goes into app.asar. The Next.js server and the Python
+# backend are copied as plain files under resources/ so they can be executed.
+files:
+  - electron/**/*
+  - package.json
+  - "!resources/**"
+
+asar: true
+npmRebuild: false
+electronFuses:
+  runAsNode: true
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+
+extraResources:
+  - from: resources/frontend
+    to: frontend
+  # electron-builder skips a node_modules directory at the root of a file matcher.
+  - from: resources/frontend/node_modules
+    to: frontend/node_modules
+  - from: resources/backend
+    to: backend
+  - from: resources/assets
+    to: assets
+  - from: resources/desktop-build.json
+    to: desktop-build.json
+
+win:
+  signExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Similia AI
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: Similia AI Setup.${ext}

@@ -27,6 +27,7 @@ export const fixtureAnalysis: Analysis = {
 
 export const fixtureAiSettings: AiSettings = {
   configured: false, vault_ready: true, provider: "anthropic", key_last4: null, model: "claude-sonnet-5-5", validated_at: null,
+  providers: [{ id: "anthropic", label: "Anthropic" }, { id: "openai", label: "OpenAI", model_example: "gpt-4.1-mini" }, { id: "gemini", label: "Google Gemini" }, { id: "openrouter", label: "OpenRouter" }],
   models: [{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5 (recommended)" }, { id: "claude-opus-5-5", label: "Claude Opus 5.5" }, { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }],
   active: false, active_until: null,
   active_options: [{ id: "1d", label: "1 day (default)" }, { id: "7d", label: "1 week" }, { id: "30d", label: "1 month" }],

@@ -2,6 +2,7 @@ import type { CaseStatus } from "./types";
 
 export const patientPath = (id: string) => `/workspace/patients/${id}`;
 export const casePath = (id: string) => `/workspace/case/${id}`;
+export const reportPath = (id: string) => `/workspace/report/${id}`;
 
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";

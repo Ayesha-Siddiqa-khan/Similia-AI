@@ -30,6 +30,8 @@ def configure_logging(level: str = "INFO") -> None:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
         root.addHandler(handler)
     root.setLevel(level.upper() if level.upper() in logging._nameToLevel else "INFO")
+    # Upstream request URLs can contain PostgREST filters and private object keys.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def log_path(path: str) -> str:

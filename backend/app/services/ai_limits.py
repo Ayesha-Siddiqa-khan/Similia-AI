@@ -24,7 +24,7 @@ WINDOWS: tuple[tuple[str, timedelta, dict[str, str]], ...] = (
     ("month", timedelta(days=30), {"analyses": "ai_analyses_per_month"}),
 )
 ACTIONS: dict[Kind, tuple[str, ...]] = {
-    "questions": ("case.questions",),
+    "questions": ("case.questions", "case.report.urdu", "ai_settings.connection_check"),
     "analyses": ("case.analyze", "case.analyze.acknowledged_red_flags"),
 }
 LABELS: dict[Kind, str] = {"questions": "question requests", "analyses": "case analyses"}
@@ -45,10 +45,10 @@ class RateLimitedError(Exception):
             wait = f"{-(-minutes // 60)} hours"
         else:
             wait = f"{minutes} minute{'s' if minutes != 1 else ''}"
-        return (
-            f"Limit reached: {self.limit} {LABELS[self.kind]} per {self.window}. "
-            f"Try again in about {wait}."
-        )
+        label = LABELS[self.kind]
+        if self.limit == 1:
+            label = "case analysis" if self.kind == "analyses" else "question request"
+        return f"Limit reached: {self.limit} {label} per {self.window}. Try again in about {wait}."
 
 
 class UsageStore(Protocol):
@@ -75,21 +75,51 @@ def _times(
     )
 
 
-def usage(store: UsageStore, owner: str, now: datetime | None = None) -> dict[str, dict[str, int]]:
-    """Hourly usage, shown in AI settings."""
+def usage(
+    store: UsageStore,
+    owner: str,
+    now: datetime | None = None,
+    *,
+    hourly_analysis_limit: int | None = None,
+    daily_analysis_limit: int | None = None,
+) -> dict[str, dict[str, int]]:
+    """Hourly usage and rolling 24-hour analysis usage shown in AI Settings."""
     now = now or datetime.now(timezone.utc)
-    return {
+    totals = {
         kind: {"used": len(_times(store, owner, kind, now)), "limit": limit_for(kind)}
         for kind in ACTIONS
     }
+    if hourly_analysis_limit is not None:
+        totals["analyses"]["limit"] = hourly_analysis_limit
+    day = timedelta(days=1)
+    totals["daily_analyses"] = {
+        "used": sum(t > now - day for t in _times(store, owner, "analyses", now, day)),
+        "limit": (
+            limit_for("analyses", "ai_analyses_per_day")
+            if daily_analysis_limit is None else daily_analysis_limit
+        ),
+    }
+    return totals
 
 
-def enforce(store: UsageStore, owner: str, kind: Kind, now: datetime | None = None) -> None:
+def enforce(
+    store: UsageStore,
+    owner: str,
+    kind: Kind,
+    now: datetime | None = None,
+    *,
+    hourly_analysis_limit: int | None = None,
+    daily_analysis_limit: int | None = None,
+) -> None:
     """Raise RateLimitedError when the owner has used up an hourly, daily or monthly allowance."""
     now = now or datetime.now(timezone.utc)
     for name, length, fields in WINDOWS:
         field = fields.get(kind)
         limit = limit_for(kind, field) if field else 0
+        if name == "hour" and kind == "analyses" and hourly_analysis_limit is not None:
+            limit = hourly_analysis_limit
+        if name == "day" and kind == "analyses" and daily_analysis_limit is not None:
+            limit = daily_analysis_limit
         if limit <= 0:
             continue
         times = [t for t in _times(store, owner, kind, now, length) if t > now - length]

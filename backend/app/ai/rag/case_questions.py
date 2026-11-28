@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from app.ai.rag.case_analysis import SYSTEM_RULES, build_case_text, screen_red_flags
-from app.services.llm import LLMProvider
+from app.services.llm import LLMProvider, structured_model
 
 STEPS = ("mental", "physical_general", "particular", "history")
 MAX_PER_STEP = 6
@@ -53,7 +53,7 @@ class ClaudeQuestionWriter:
         self._llm = llm
 
     def write(self, case_text: str, include_urdu: bool) -> FollowUps:
-        model = self._llm.chat_model().with_structured_output(FollowUps)  # type: ignore[attr-defined]
+        model = structured_model(self._llm.chat_model(), FollowUps)
         urdu = (
             " For every item also fill topic_ur, question_ur and example_answer_ur with a natural "
             "Urdu translation "

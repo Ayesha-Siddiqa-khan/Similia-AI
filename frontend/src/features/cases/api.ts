@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/backend";
-import type { AiSettings, Analysis, CaseHistoryItem, CaseRecord, ConsentRecord, Patient } from "./types";
+import type { AiSettings, Analysis, CaseHistoryItem, CaseRecord, ConsentRecord, Patient, Review } from "./types";
 
 const json = (body: unknown): RequestInit => ({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const post = <T,>(path: string, body?: unknown) => api<T>(path, { method: "POST", ...(body === undefined ? {} : json(body)) });
@@ -49,4 +49,15 @@ export function useLatestAnalysis(id: string) {
 }
 export function useAiSettings() {
   return useQuery({ queryKey: ["ai-settings"], queryFn: ({ signal }) => api<AiSettings>("settings/ai", { signal }), retry: noRetryOnAuth });
+}
+export function useReview(caseId: string) {
+  return useQuery({
+    queryKey: ["review", caseId],
+    queryFn: async ({ signal }) => {
+      try { return await api<Review>(`cases/${caseId}/review`, { signal }); }
+      catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
+    },
+    retry: noRetryOnAuth,
+    enabled: caseId !== "",
+  });
 }

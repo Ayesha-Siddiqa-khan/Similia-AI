@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +19,9 @@ from app.ai.rag.case_analysis import (
 from app.api.auth import require_practitioner
 from app.api.routes import cases as cases_routes
 from app.main import create_app
+from app.services import knowledge_db
+from app.services.compatible_llm import CompatibleProviderError
+from tests.conftest import MockEmbeddingProvider
 from tests.test_case_analysis import FakeReasoner, FakeRetriever, passage
 
 
@@ -335,6 +339,157 @@ def test_analysis_needs_consent_and_content(env: Env):
     assert env.client.post(f"/api/cases/{empty}/analyze").status_code == 422
 
 
+def test_semantic_rerun_saves_a_new_report_if_coverage_is_unavailable(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = MockEmbeddingProvider()
+    db = object()
+    env.client.app.dependency_overrides.pop(cases_routes.get_analyzer)
+    env.client.app.dependency_overrides[cases_routes.get_ai_store] = lambda: SimpleNamespace(
+        get=lambda _owner: None
+    )
+    monkeypatch.setattr(cases_routes, "_own_llm", lambda *_: SimpleNamespace(model="test-model"))
+    monkeypatch.setattr(cases_routes, "get_supabase_admin_client", lambda: db)
+    monkeypatch.setattr(cases_routes, "get_embedding_provider", lambda: embedder)
+    monkeypatch.setattr(
+        ClaudeReasoner,
+        "normalise",
+        lambda *_: NormalisedCase(queries=[SearchQuery(text="headache")]),
+    )
+    monkeypatch.setattr(
+        ClaudeReasoner,
+        "rank",
+        lambda *_: RankedOutput(
+            remedies=[
+                RankedRemedy(remedy="Example", confidence="low", rationale="fits", citations=["P1"])
+            ]
+        ),
+    )
+    row = {
+        "book_id": "book-1",
+        "book_title": "Test source",
+        "book_category": "materia_medica",
+        "content": "Test passage",
+        "similarity": 0.95,
+    }
+    monkeypatch.setattr(
+        knowledge_db,
+        "keyword_search_chunks",
+        lambda *_a, **_kw: [
+            {**row, "chunk_id": "keyword-chunk"},
+        ],
+    )
+
+    def vector_search(
+        client: object, *, query_embedding: list[float], **_kwargs: Any
+    ) -> list[dict]:
+        assert client is db and query_embedding == embedder._vector("headache")
+        return [{**row, "chunk_id": "semantic-chunk"}]
+
+    monkeypatch.setattr(knowledge_db, "search_chunks", vector_search)
+    monkeypatch.setattr(knowledge_db, "book_stats", lambda _: [])
+    case_url = f"/api/cases/{make_case(env)}"
+    first = env.client.post(f"{case_url}/analyze?search_mode=keyword")
+    assert first.status_code == 201 and first.json()["retrieval_mode"] == "keyword"
+    assert embedder.query_calls == []
+
+    def unavailable(_client: object) -> list[dict]:
+        raise knowledge_db.KnowledgeDBError("private database error")
+
+    monkeypatch.setattr(knowledge_db, "book_stats", unavailable)
+    rerun = env.client.post(f"{case_url}/analyze?search_mode=semantic")
+    assert rerun.status_code == 201
+    semantic = rerun.json()
+    assert semantic["id"] != first.json()["id"] and semantic["retrieval_mode"] == "semantic"
+    assert semantic["model"] == "test-model"
+    assert semantic["remedies"][0]["citations"] == ["semantic-chunk"]
+    assert semantic["incomplete_books"] == ["Test source"]
+    assert embedder.query_calls == ["headache"]
+    assert env.client.get(f"{case_url}/analysis").json() == semantic
+    assert [item["id"] for item in env.client.get(f"{case_url}/analyses").json()] == [
+        semantic["id"],
+        first.json()["id"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "provider_message", "visible_message"),
+    [
+        (403, "Access denied", "Check your key, model and billing"),
+        (400, "Your credit balance is too low", "Check billing and available credits"),
+    ],
+)
+def test_analysis_provider_rejection_does_not_expose_the_error_body(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    provider_message: str,
+    visible_message: str,
+) -> None:
+    class Rejected(Exception):
+        def __init__(self) -> None:
+            super().__init__("private provider body")
+            self.status_code = status_code
+            self.message = provider_message
+
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise Rejected()
+
+    monkeypatch.setattr(CaseAnalyzer, "analyze", reject)
+    response = env.client.post(f"/api/cases/{make_case(env)}/analyze?search_mode=semantic")
+    assert response.status_code == 502
+    assert visible_message in response.json()["detail"]
+    assert provider_message not in response.text
+    assert "private provider body" not in response.text
+    assert env.store.analyses == {}
+
+
+def test_analysis_reports_provider_quota_failure(env: Env, monkeypatch: pytest.MonkeyPatch):
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise CompatibleProviderError(429)
+
+    monkeypatch.setattr(CaseAnalyzer, "analyze", reject)
+    response = env.client.post(f"/api/cases/{make_case(env)}/analyze?search_mode=keyword")
+    assert response.status_code == 502
+    assert "rate or quota limit" in response.json()["detail"]
+    assert env.store.analyses == {}
+
+
+def test_acknowledged_retry_reports_a_source_library_failure(env: Env, monkeypatch):
+    def fail(_self, _case, acknowledge_red_flags=False):
+        assert acknowledge_red_flags is True
+        raise knowledge_db.KnowledgeDBError("private database detail")
+
+    monkeypatch.setattr(CaseAnalyzer, "analyze", fail)
+    case_id = make_case(env)
+    response = env.client.post(f"/api/cases/{case_id}/analyze?acknowledge_red_flags=true")
+    assert response.status_code == 502
+    assert response.json()["detail"] == "The source library could not be searched. Try again later."
+    assert env.store.analyses == {}
+
+
+def test_failed_acknowledged_ranking_keeps_the_safety_result(env: Env, monkeypatch):
+    def prepare(*_args):
+        return NormalisedCase(
+            queries=[SearchQuery(text="synthetic query")], urgent_concerns=["Synthetic concern"]
+        )
+
+    def fail_ranking(*_args):
+        raise RuntimeError("private provider response")
+
+    monkeypatch.setattr(FakeReasoner, "normalise", prepare)
+    monkeypatch.setattr(FakeReasoner, "rank", fail_ranking)
+    case_url = f"/api/cases/{make_case(env)}"
+    stopped = env.client.post(f"{case_url}/analyze")
+    assert stopped.status_code == 201 and stopped.json()["outcome"] == "red_flag"
+
+    retry = env.client.post(f"{case_url}/analyze?acknowledge_red_flags=true")
+    assert retry.status_code == 502
+    assert "interpreting the retrieved sources" in retry.json()["detail"]
+    assert "private provider response" not in retry.text
+    assert env.client.get(f"{case_url}/analysis").json() == stopped.json()
+
+
 def test_analysis_returns_cited_remedies_and_review_signs_off(env: Env):
     case_id = make_case(env)
     analysis = env.client.post(f"/api/cases/{case_id}/analyze")
@@ -352,7 +507,10 @@ def test_analysis_returns_cited_remedies_and_review_signs_off(env: Env):
     assert no_remedy.status_code == 422
     review = env.client.post(
         f"/api/cases/{case_id}/review",
-        json={"analysis_id": body["id"], "decision": "accepted", "chosen_remedy": "Belladonna"},
+        json={
+            "analysis_id": body["id"], "decision": "accepted", "chosen_remedy": "Belladonna",
+            "practitioner_name": "Dr Test",
+        },
     )
     assert review.status_code == 201
     assert env.client.get(f"/api/cases/{case_id}").json()["status"] == "signed_off"
@@ -436,3 +594,84 @@ def test_analysis_output_names_partly_indexed_books() -> None:
         ],
     }
     assert cases_routes._analysis_out(row).incomplete_books == ["Partial Book"]
+
+
+def test_prescription_workflow_saves_and_finalises_with_pdf_download(env: Env) -> None:
+    case_id = make_case(env, complaint="Severe itchy eczema worse at night in warm bed")
+    analysis = env.client.post(f"/api/cases/{case_id}/analyze")
+    assert analysis.status_code == 201
+    analysis_id = analysis.json()["id"]
+
+    # Finalise prescription with full clinical details
+    review_payload = {
+        "analysis_id": analysis_id,
+        "decision": "accepted",
+        "chosen_remedy": "Sulphur",
+        "diagnosis": "Atopic Dermatitis with nocturnal pruritus",
+        "potency": "30C",
+        "practitioner_name": "Dr Test",
+        "dose": "4 pills",
+        "frequency": "Twice daily",
+        "duration": "7 days",
+        "instructions": "Take on empty tongue 15 min before meals. Avoid camphor and mint.",
+        "notes": "Patient advised to return in 1 week.",
+    }
+    res = env.client.post(f"/api/cases/{case_id}/review", json=review_payload)
+    assert res.status_code == 201
+    review = res.json()
+    assert review["decision"] == "accepted"
+    assert review["chosen_remedy"] == "Sulphur"
+    assert review["diagnosis"] == "Atopic Dermatitis with nocturnal pruritus"
+    assert review["potency"] == "30C"
+    assert review["dose"] == "4 pills"
+    assert review["frequency"] == "Twice daily"
+    assert review["duration"] == "7 days"
+    assert "Take on empty tongue" in review["instructions"]
+
+    # Check GET /cases/{case_id}/review
+    get_res = env.client.get(f"/api/cases/{case_id}/review")
+    assert get_res.status_code == 200
+    assert get_res.json()["chosen_remedy"] == "Sulphur"
+
+    # Check GET /cases/{case_id}/prescription/file
+    pdf_res = env.client.get(f"/api/cases/{case_id}/prescription/file")
+    assert pdf_res.status_code == 200
+    assert pdf_res.headers["content-type"] == "application/pdf"
+    assert pdf_res.content.startswith(b"%PDF")
+    disposition = pdf_res.headers["content-disposition"]
+    assert "prescription-" in disposition and disposition.endswith('.pdf"')
+
+
+def test_red_flag_requires_urgency_disposition_to_finalise(env: Env) -> None:
+    case_id = make_case(env, complaint="crushing chest pain and cannot breathe")
+    # Acknowledge to run analysis
+    analysis_res = env.client.post(f"/api/cases/{case_id}/analyze?acknowledge_red_flags=true")
+    assert analysis_res.status_code == 201
+    analysis_id = analysis_res.json()["id"]
+
+    # Attempting to finalise without urgency_disposition should be rejected with 422
+    attempt = env.client.post(
+        f"/api/cases/{case_id}/review",
+        json={
+            "analysis_id": analysis_id, "decision": "accepted", "chosen_remedy": "Aconite",
+            "practitioner_name": "Dr Test",
+        },
+    )
+    assert attempt.status_code == 422
+    assert "urgent findings" in attempt.json()["detail"].lower()
+
+    # Finalising with urgency_disposition succeeds
+    success = env.client.post(
+        f"/api/cases/{case_id}/review",
+        json={
+            "analysis_id": analysis_id,
+            "decision": "accepted",
+            "chosen_remedy": "Aconite",
+            "practitioner_name": "Dr Test",
+            "urgency_disposition": (
+                "Cardiology referral arranged immediately; emergency services notified."
+            ),
+        },
+    )
+    assert success.status_code == 201
+    assert success.json()["urgency_disposition"].startswith("Cardiology referral")

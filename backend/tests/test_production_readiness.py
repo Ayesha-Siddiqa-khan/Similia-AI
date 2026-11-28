@@ -48,6 +48,13 @@ def test_production_needs_https_origins_and_a_search_key() -> None:
     assert "https://" in problems and "VOYAGE_API_KEY" in problems
 
 
+def test_only_desktop_allows_loopback_http_origins() -> None:
+    cors = "http://127.0.0.1:41000"
+    assert configuration_problems(good(cors_origins=cors))
+    ready = good(environment="desktop", cors_origins=cors, desktop_token="test-launch-token")
+    assert configuration_problems(ready) == []
+
+
 def test_development_only_warns(caplog: pytest.LogCaptureFixture) -> None:
     dev = good(environment="development", supabase_url="", cors_origins="http://localhost:3000")
     with caplog.at_level(logging.WARNING):

@@ -69,6 +69,20 @@ it("keeps search available as keyword matching while the provider stop is set", 
   expect(screen.getByRole("button", { name: "Review and search" })).toBeEnabled();
   expect(screen.getByText(/meaning-based search is off/)).toBeInTheDocument();
 });
+it("sends the chosen search method and reports a fallback with its reason", async () => {
+  const result = { query: "q", k: 5, latency_ms: 3, retrieval_mode: "keyword", requested_mode: "hybrid", fallback_reason: "Meaning-based search was unavailable: APIError (HTTP 403)", incomplete_books: [], results: [] };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+  mount(<Search data={fixtureSnapshot} />);
+  fireEvent.change(screen.getByLabelText("Search query"), { target: { value: "burning pain" } });
+  expect(screen.getAllByRole("option").map((o) => (o as HTMLOptionElement).value)).toEqual(expect.arrayContaining(["semantic", "keyword", "hybrid"]));
+  fireEvent.change(screen.getByLabelText("Search method"), { target: { value: "hybrid" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review and search" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm search" }));
+  expect(await screen.findByText(/Hybrid search could not be used, so Keyword matching ran instead/)).toBeInTheDocument();
+  expect(screen.getByText(/HTTP 403/)).toBeInTheDocument();
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ mode: "hybrid", query: "burning pain" });
+});
 it("labels keyword results and warns that they are not meaning-based", async () => {
   const result = { query: "q", k: 5, latency_ms: 3, retrieval_mode: "keyword", incomplete_books: [], results: [{ chunk_id: "c1", book_id: "b1", book_title: "Materia Medica", book_category: "materia_medica", section_heading: "Arsenicum", section_path: [], content: "burning pain", similarity: 0.4, metadata: {}, retrieval_mode: "keyword", page_start: 7, page_end: 7, book_complete: true }] };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200 })));

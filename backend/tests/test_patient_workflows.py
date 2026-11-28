@@ -32,7 +32,10 @@ def sign_off(env: Env, case_id: str) -> None:
     analysis = env.client.post(f"/api/cases/{case_id}/analyze").json()
     review = env.client.post(
         f"/api/cases/{case_id}/review",
-        json={"analysis_id": analysis["id"], "decision": "accepted", "chosen_remedy": "Belladonna"},
+        json={
+            "analysis_id": analysis["id"], "decision": "accepted", "chosen_remedy": "Belladonna",
+            "practitioner_name": "Dr Test",
+        },
     )
     assert review.status_code == 201
 

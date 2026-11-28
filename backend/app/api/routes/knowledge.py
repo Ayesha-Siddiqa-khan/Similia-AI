@@ -17,10 +17,12 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     status,
 )
 
+from app.ai.ingestion.auto import AutoResume
 from app.ai.ingestion.extraction import ExtractionError
 from app.ai.ingestion.service import (
     BookNotFoundError,
@@ -33,10 +35,14 @@ from app.ai.ingestion.service import (
 )
 from app.ai.rag.coverage import book_completeness, page_range
 from app.ai.rag.guard import embedding_paused, pause_reason
-from app.ai.rag.retrieval import FallbackRetriever, KeywordRetriever, Retriever, VectorRetriever
+from app.ai.rag.retrieval import build_retriever
 from app.api.auth import require_operator
 from app.core.config import get_settings
 from app.schemas.ingestion import (
+    AutoStartOut,
+    AutoStartRequest,
+    AutoStopOut,
+    AutoStopRequest,
     BookIngestionOut,
     ChunkPage,
     EventOut,
@@ -48,6 +54,7 @@ from app.schemas.ingestion import (
 )
 from app.schemas.knowledge import BookOut, PassageOut, SearchRequest, SearchResponse
 from app.services import knowledge_db
+from app.services.book_list_files import render_book_list_pdf
 from app.services.embeddings import VOYAGE_DEFAULT_DIMENSION, get_embedding_provider
 from app.services.supabase import get_supabase_admin_client
 
@@ -99,6 +106,14 @@ def get_ingestion_service() -> IngestionService:
 
 
 Service = Annotated[IngestionService, Depends(get_ingestion_service)]
+
+
+@lru_cache
+def get_auto_resume() -> AutoResume:
+    return AutoResume(get_ingestion_service())
+
+
+Auto = Annotated[AutoResume, Depends(get_auto_resume)]
 
 
 def _require_db_config() -> None:
@@ -197,6 +212,21 @@ def ingestion_overview(service: Service) -> OverviewOut:
     return OverviewOut(**data)
 
 
+@router.get("/ingestion/books/list.pdf")
+def download_book_list(service: Service) -> Response:
+    """A PDF list of every book's source document name. Calls no provider and stores nothing."""
+    _require_db_config()
+    try:
+        books = service.overview()["books"]
+    except Exception as exc:
+        _fail(exc)
+    return Response(
+        content=render_book_list_pdf(books),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="ingestion-book-list.pdf"'},
+    )
+
+
 @router.get("/books/{book_id}/ingestion", response_model=BookIngestionOut)
 def book_ingestion(book_id: UUID, service: Service) -> BookIngestionOut:
     _require_db_config()
@@ -232,6 +262,27 @@ def start_ingestion(
         _fail(exc)
     background_tasks.add_task(service.run_ingestion, job["id"])
     return JobOut(**job)
+
+
+@router.post("/ingestion/auto", response_model=AutoStartOut)
+def start_auto_resume(body: AutoStartRequest, auto: Auto) -> AutoStartOut:
+    """Keep embedding the chosen books automatically. Spends provider tokens, so it needs
+    confirmed=true; every limit, the budget and the provider stop still apply."""
+    _require_db_config()
+    try:
+        return AutoStartOut(**auto.enable(body.book_ids, body.confirmed))
+    except Exception as exc:
+        _fail(exc)
+
+
+@router.post("/ingestion/auto/stop", response_model=AutoStopOut)
+def stop_auto_resume(body: AutoStopRequest, auto: Auto) -> AutoStopOut:
+    """Stop automatic resume for some books or all. Running jobs finish their current batch."""
+    _require_db_config()
+    try:
+        return AutoStopOut(stopped=auto.disable(body.book_ids))
+    except Exception as exc:
+        _fail(exc)
 
 
 @router.post("/ingestion-jobs/{job_id}/pause", response_model=JobOut)
@@ -309,13 +360,9 @@ def search_knowledge_base(request: SearchRequest) -> SearchResponse:
     """Meaning-based search, or labelled keyword matching when that is unavailable."""
     _require_db_config()
     db = get_supabase_admin_client()
-    keyword = KeywordRetriever(db)
-    # Meaning-based search when allowed and reachable; otherwise word matching, clearly labelled.
-    retriever: Retriever = (
-        keyword
-        if embedding_paused()
-        else FallbackRetriever(VectorRetriever(db=db, embedder=get_embedding_provider()), keyword)
-    )
+    # The requested method (semantic, keyword or hybrid), with a safe fall back to keyword
+    # matching. The response says which method actually ran and why it differs, if it does.
+    retriever = build_retriever(request.mode, db, get_embedding_provider, paused=embedding_paused())
     passages, latency_ms = retriever.search(
         query=request.query,
         k=request.k,
@@ -323,21 +370,28 @@ def search_knowledge_base(request: SearchRequest) -> SearchResponse:
         threshold=request.threshold,
     )
     mode = getattr(retriever, "mode", "semantic")
-    knowledge_db.save_retrieval_evaluation(
-        db,
-        {
-            "query_text": request.query,
-            "category_filter": request.category.value if request.category else None,
-            "k": request.k,
-            "results": [
-                {"chunk_id": p.chunk_id, "book_id": p.book_id, "score": p.similarity}
-                for p in passages
-            ],
-            "embedding_model": "keyword" if mode == "keyword" else get_settings().voyage_model,
-            "latency_ms": latency_ms,
-        },
-    )
-    complete = book_completeness(db)
+    try:
+        knowledge_db.save_retrieval_evaluation(
+            db,
+            {
+                "query_text": request.query,
+                "category_filter": request.category.value if request.category else None,
+                "k": request.k,
+                "results": [
+                    {"chunk_id": p.chunk_id, "book_id": p.book_id, "score": p.similarity}
+                    for p in passages
+                ],
+                "embedding_model": "keyword" if mode == "keyword" else get_settings().voyage_model,
+                "latency_ms": latency_ms,
+            },
+        )
+    except knowledge_db.KnowledgeDBError:
+        logger.warning("Could not save the retrieval evaluation")
+    try:
+        complete = book_completeness(db)
+    except knowledge_db.KnowledgeDBError:
+        complete = {}
+        logger.warning("Could not verify source coverage for library search")
     results: list[PassageOut] = []
     incomplete: set[str] = set()
     for p in passages:
@@ -355,4 +409,6 @@ def search_knowledge_base(request: SearchRequest) -> SearchResponse:
         results=results,
         incomplete_books=sorted(incomplete),
         retrieval_mode=mode,
+        requested_mode=request.mode,
+        fallback_reason=getattr(retriever, "fallback_reason", None),
     )

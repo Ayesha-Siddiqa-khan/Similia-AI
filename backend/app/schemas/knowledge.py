@@ -1,6 +1,7 @@
 """Pydantic request/response schemas for the knowledge-base API."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +49,7 @@ class SearchRequest(BaseModel):
     k: int = Field(default=5, ge=1, le=50)
     category: KnowledgeSource | None = None
     threshold: float = Field(default=0.0, ge=-1.0, le=1.0)
+    mode: Literal["semantic", "keyword", "hybrid"] = "semantic"
 
 
 class PassageOut(BaseModel):
@@ -68,6 +70,7 @@ class PassageOut(BaseModel):
     page_end: int | None = None
     book_complete: bool = True  # False: the book is only partly indexed, so evidence may be missing
     retrieval_mode: str = "semantic"  # "keyword": word match score, not a meaning similarity
+    matched_by: list[str] = Field(default_factory=list)  # "semantic", "keyword" or both
 
 
 class SearchResponse(BaseModel):
@@ -79,4 +82,6 @@ class SearchResponse(BaseModel):
     results: list[PassageOut]
     # titles of partly indexed books in the results
     incomplete_books: list[str] = Field(default_factory=list)
-    retrieval_mode: str = "semantic"
+    retrieval_mode: str = "semantic"  # the method that actually ran
+    requested_mode: str = "semantic"  # the method the user asked for
+    fallback_reason: str | None = None  # why they differ (error type and HTTP status only)

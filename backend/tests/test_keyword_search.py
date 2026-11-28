@@ -156,7 +156,7 @@ def test_semantic_hits_below_the_threshold_are_still_dropped() -> None:
     assert analyzer(Weak()).analyze(case()).outcome == "insufficient_sources"
 
 
-def test_the_analysis_output_says_keyword_when_any_passage_was_found_by_words() -> None:
+def test_the_analysis_output_keeps_both_methods_in_a_mixed_snapshot() -> None:
     from uuid import uuid4
 
     from app.api.routes import cases as cases_routes
@@ -177,10 +177,10 @@ def test_the_analysis_output_says_keyword_when_any_passage_was_found_by_words() 
     }
     semantic = {**keyword, "chunk_id": "b", "retrieval_mode": "semantic"}
     assert cases_routes._analysis_out({**base, "passages": [semantic, keyword]}).retrieval_mode == (
-        "keyword"
+        "mixed"
     )
     assert cases_routes._analysis_out({**base, "passages": [semantic]}).retrieval_mode == "semantic"
-    assert cases_routes._analysis_out({**base, "passages": []}).retrieval_mode == "semantic"
+    assert cases_routes._analysis_out({**base, "passages": []}).retrieval_mode == "unknown"
 
 
 def test_a_provider_stop_means_keyword_search_even_for_an_unreachable_provider(
@@ -209,7 +209,7 @@ def test_a_provider_stop_means_keyword_search_even_for_an_unreachable_provider(
         def search(self, *_a, **_k):
             raise RuntimeError("403 Forbidden")
 
-    monkeypatch.setattr(knowledge, "VectorRetriever", Refused)
+    monkeypatch.setattr("app.ai.rag.retrieval.VectorRetriever", Refused)
     monkeypatch.setattr(knowledge, "get_embedding_provider", lambda: object())
     app = create_app()
     app.dependency_overrides[require_operator] = lambda: "operator"

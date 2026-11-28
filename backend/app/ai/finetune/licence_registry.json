@@ -1,0 +1,519 @@
+{
+  "version": "pd-basis-v1",
+  "updated": "2026-11-27",
+  "policy": "A book is exportable only when its content hash appears here with status 'cleared_public_domain' and exportable true. Clearance under this policy means: the author died more than 70 years ago, the extracted text is a nineteenth-century or early twentieth-century edition, no copyright notice or modern editorial matter appears in the text, and any modern names in the file are digitisation credits rather than authorship claims. This is an engineering clearance for internal research, not a legal opinion. Legal review remains required before any redistribution or commercial use.",
+  "default_status": "blocked_unverified",
+  "books": {
+    "aa7bc8b98ac71942688f760f673c68c7cd5f9765c21e1c38c7c83690b40059c6": {
+      "title": "The Homoeopathic Materia Medica",
+      "status": "cleared_public_domain",
+      "basis": "Author died in 1868; the extracted text is a nineteenth-century English translation digitised by Google; no copyright notice in the text.",
+      "author_death_year": 1868,
+      "evidence": [
+        "Google Books reproduction notice on page 1",
+        "No copyright, rights reserved or ISBN signal in the extracted text",
+        "Nineteenth-century typography and spelling"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Alphonse Teste (1814-1868).",
+      "display_author": "A. Teste"
+    },
+    "623561afc219aa23623541290d1b80e4853c5d8b37a27ecf2efd10c449922be8": {
+      "title": "TheChronicDiseases",
+      "status": "cleared_public_domain",
+      "basis": "Hahnemann died in 1843; Tafel's English translation is a nineteenth-century work; no copyright notice in the text.",
+      "author_death_year": 1843,
+      "evidence": [
+        "Translator's preface names Louis H. Tafel and the 1835 German edition",
+        "No copyright, rights reserved or ISBN signal in the extracted text",
+        "Only a modern digital-reprint watermark is present"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Samuel Hahnemann (1755-1843). The Bidani watermark is a digitisation credit, not authorship.",
+      "display_author": "Samuel Hahnemann"
+    },
+    "1e93f14899b3dbfaab2a54243a3685a04b2872a3ecb0eafae502d1263496b7af": {
+      "title": "Hartman's Acute Disease vol2",
+      "status": "cleared_public_domain",
+      "basis": "Hartmann died in 1853; the extracted text is a nineteenth-century English translation; no copyright notice in the text.",
+      "author_death_year": 1853,
+      "evidence": [
+        "Author dates recorded in the database as 1796-1853",
+        "No copyright, rights reserved or ISBN signal in the extracted text",
+        "Nineteenth-century typography and case reports"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Franz Hartmann (1796-1853).",
+      "display_author": "Franz Hartmann"
+    },
+    "9bbf965351240708f1237e4f227805ab6d8f32ce89361a40b83e4d52af06cc8b": {
+      "title": "Hartman's Chronic Diseases IIIrd Edition",
+      "status": "cleared_public_domain",
+      "basis": "Hartmann died in 1853; the extracted text is a nineteenth-century English translation; no copyright notice in the text.",
+      "author_death_year": 1853,
+      "evidence": [
+        "Author dates recorded in the database as 1796-1853",
+        "No copyright, rights reserved or ISBN signal in the extracted text",
+        "Nineteenth-century typography and case reports"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Franz Hartmann (1796-1853).",
+      "display_author": "Franz Hartmann"
+    },
+    "58f93b47f5fe52415458ab4331898859b93295f333d334d10e6f9c837a8db323": {
+      "title": "Philosophy. CM Boger",
+      "status": "cleared_public_domain",
+      "basis": "Boger died in 1935; UK copyright expired at the end of 2005; no copyright notice in the text.",
+      "author_death_year": 1935,
+      "evidence": [
+        "Author named in the book front matter as C. M. Boger",
+        "No copyright, rights reserved or ISBN signal in the extracted text"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Cyrus Maxwell Boger (1861-1935).",
+      "display_author": "C. M. Boger"
+    },
+    "d9079239d427085fb2a730caa4b16094949a0d29f8233f3acca80e4f03afad4f": {
+      "title": "materia medica of nosodes henry clay allen",
+      "status": "cleared_public_domain",
+      "basis": "Allen died in 1909; UK copyright expired at the end of 1979; no copyright notice in the text.",
+      "author_death_year": 1909,
+      "evidence": [
+        "Author named on page 1 as Henry Clay Allen, M.D.",
+        "No copyright, rights reserved or ISBN signal in the extracted text"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Henry Clay Allen (1836-1909).",
+      "display_author": "Henry Clay Allen"
+    },
+    "e9f22a9d1c45782044befd8c9f503972b726a971e8d9e502e01ada704dc61b64": {
+      "title": "Lectures-on-Homeopathic-Philosophy",
+      "status": "cleared_public_domain",
+      "basis": "Kent died in 1916; UK copyright expired at the end of 1986; this copy has no copyright notice.",
+      "author_death_year": 1916,
+      "evidence": [
+        "Author named on page 1 as James Tyler Kent",
+        "No copyright, rights reserved or ISBN signal in the extracted text"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": true,
+      "notes": "Preferred copy. The alternative scan carries a modern Bidani copyright front page and is suppressed.",
+      "display_author": "James Tyler Kent"
+    },
+    "6256f94a7499353b54e9fa5f33d14fa83a69f5d2dbc1a7830490e736197727c9": {
+      "title": "kent repertory",
+      "status": "cleared_public_domain",
+      "basis": "The text explicitly states 'Public Domain Text Converted into PDF Format by Nalanda Digital Library'.",
+      "author_death_year": 1916,
+      "evidence": [
+        "Repeated public-domain statement in the extracted text"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": false,
+      "notes": "Cleared but not exportable: 600 chunks are almost entirely index and navigation boilerplate with no substantive prose.",
+      "display_author": "James Tyler Kent"
+    },
+    "e729317deec9a803a8637be137347f0ef96dfbc4695cb1b33e1fbbce88dabed0": {
+      "title": "lectures-on-homoeopathic-philosophy-kent",
+      "status": "suppressed_duplicate",
+      "basis": "Near-duplicate of the cleared Kent lectures scan; its front page also carries a modern copyright claim.",
+      "author_death_year": 1916,
+      "evidence": [
+        "Size differs from the preferred copy by less than 0.1 percent",
+        "Front page: copyright Dr. Navneet Bidani"
+      ],
+      "legal_review": "required_before_redistribution",
+      "exportable": false,
+      "notes": "Suppressed to prevent validation leakage."
+    },
+    "40a3a2a46a81064178790245efed4750c5d595f8e36dc5a92a2aad0ce0a0f2d1": {
+      "title": "Ajit Kulkarni - Body Language and Homeopathy",
+      "status": "blocked_copyright",
+      "basis": "Published by B. Jain Publishers in 2010; copyright and ISBN notices are present in the text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved",
+        "ISBN"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern in-copyright work."
+    },
+    "87c0ebcccbb0857bc4667eec8c6c4b36e6c28f264907768762875c5bdf1d84c1": {
+      "title": "Organon of Medicine 6th edition",
+      "status": "blocked_copyright",
+      "basis": "Modern English translation by Kunzli, Naude and Pendleton; the translation carries its own copyright even though Hahnemann's original is public domain.",
+      "author_death_year": 1843,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved",
+        "ISBN",
+        "Named modern translators"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Do not clear on the basis of Hahnemann's death year alone."
+    },
+    "f8ae4511c0a746469f667f0a9ec9b8dd3a1086286bcf63ef81f140b1d204f1ba": {
+      "title": "Synoptic Materia medica I",
+      "status": "blocked_copyright",
+      "basis": "Modern work by Frans Vermeulen; in copyright.",
+      "author_death_year": null,
+      "evidence": [
+        "Named modern author",
+        "Modern publisher formatting"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "aa175972a19bb2f746543e982f315d8dc95617023bcabda87f5e2bb1f755febf": {
+      "title": "Encyclopedia of remedy relationships - Part 1",
+      "status": "blocked_copyright",
+      "basis": "Modern compilation by A. Rehman; ISBN present; in copyright.",
+      "author_death_year": null,
+      "evidence": [
+        "ISBN",
+        "Modern compilation"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "c9d3d2de1db74d96150937cd46aecf380d39bc6020cec38aa9061230164a6fe8": {
+      "title": "Encyclopedia of remedy relationships - Part 2",
+      "status": "blocked_copyright",
+      "basis": "Modern compilation by A. Rehman; ISBN present; in copyright.",
+      "author_death_year": null,
+      "evidence": [
+        "ISBN",
+        "Modern compilation"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "0d7e74ae3fa92acecf7b9b4c2e70b1029b7e411be492d2f5bb94d5a96e28ecfd": {
+      "title": "HomeopathicPharmacy",
+      "status": "blocked_copyright",
+      "basis": "Copyright, all rights reserved and ISBN notices present in the text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved",
+        "ISBN"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern edition."
+    },
+    "4eefea29e27bb34a52eb41707823432721d3c684e2c50f23aba2cc7847d37637": {
+      "title": "homepathic 5",
+      "status": "blocked_copyright",
+      "basis": "Copyright, all rights reserved and ISBN notices present in the text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved",
+        "ISBN"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern edition."
+    },
+    "68fa01c949cc6d1d609690bfd6781b5168f35d09fcc9db284142cf367f4c98ef": {
+      "title": "encyclopedia-of-homeopathy",
+      "status": "blocked_copyright",
+      "basis": "Copyright, all rights reserved and ISBN notices present in the text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved",
+        "ISBN"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern compilation."
+    },
+    "78cf940676468e638ce3fafa3ee0e02993aee444540ad118b34d447a98e53be4": {
+      "title": "HOMEOPATHIC",
+      "status": "blocked_copyright",
+      "basis": "Seventy-four copyright notices in the extracted text.",
+      "author_death_year": null,
+      "evidence": [
+        "Repeated copyright notices"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern compilation."
+    },
+    "a4fd722d456ac130735e9c6890770a1ff5e21d272840f2f064fae93f645cec65": {
+      "title": "pocketmanualhom00boergoog_text - Part 1",
+      "status": "blocked_copyright",
+      "basis": "Copyright notices present; the edition is not verified as public domain.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "Public-domain claim also present but unverified"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Mixed signals; treat as blocked."
+    },
+    "45dba9ab7a6e43ef03d0d156d87e1ef6d05139b0e08bbc485932c9d2a0a52594": {
+      "title": "pocketmanualhom00boergoog_text - Part 2",
+      "status": "blocked_copyright",
+      "basis": "Twenty-three copyright notices in the extracted text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern edition."
+    },
+    "005ab7d1622a9eff4a074f981f3ffd8d640a7c3267e59796b19919d6520cb8ea": {
+      "title": "DISEASES OF SKIN",
+      "status": "blocked_copyright",
+      "basis": "All rights reserved notice present in the text.",
+      "author_death_year": null,
+      "evidence": [
+        "All rights reserved"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern edition."
+    },
+    "204cf5f4418a623e7c1e626cf560b32825739ec92ea1e34431e802d081fa7164": {
+      "title": "Homeopathy for Arthritis",
+      "status": "blocked_copyright",
+      "basis": "Sixteen copyright and all-rights-reserved notices in the extracted text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern work."
+    },
+    "9d0e17b438c851180be46964a6dab75feb9888e587906f816e1aa65c9666d460": {
+      "title": "Allergy-Resp",
+      "status": "blocked_copyright",
+      "basis": "Eleven copyright and all-rights-reserved notices in the extracted text.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "All rights reserved"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern work."
+    },
+    "60c2c0b65de67440d86e5cb5b88c5ddb59e0112d77fe7037d6ffe7d92af0cd57": {
+      "title": "Hallucinogenic Plants",
+      "status": "blocked_copyright",
+      "basis": "Modern illustrated work with an ISBN; in copyright.",
+      "author_death_year": null,
+      "evidence": [
+        "ISBN",
+        "Modern layout"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "52786a7c64698b5b4db0822ebdc1f427a52a8a54a0148e22ae7fb14412f96e75": {
+      "title": "article-harmful_homeo",
+      "status": "blocked_copyright",
+      "basis": "Modern journal article with an ISBN-style identifier; authorship and rights are unverified.",
+      "author_death_year": null,
+      "evidence": [
+        "ISBN-style identifier",
+        "Modern article"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "3f523861bac465841ef41cb8b3a39d1fbf801164c6083cc70a19ab293713e308": {
+      "title": "Corona homeo pneumo Murphy",
+      "status": "blocked_copyright",
+      "basis": "Modern compilation attributed to Robin Murphy; in copyright.",
+      "author_death_year": null,
+      "evidence": [
+        "Named modern author",
+        "Modern publication"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "0b76a4353be4ed32dbf90316867b74767d1cb439b1e663bf1755a0731368fd66": {
+      "title": "homeo",
+      "status": "blocked_copyright",
+      "basis": "Copyright notice present; the edition is not verified as public domain.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Mixed signals; treat as blocked."
+    },
+    "9747e9e15915e5a311deb0d7457ee08fccf2ae2f690bed2c4cf64e93094aa2e4": {
+      "title": "rare-mother-tincture",
+      "status": "blocked_copyright",
+      "basis": "Copyright notice present; authorship and edition are unverified.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Modern compilation."
+    },
+    "5d568116ec6bc769c1bb4c4434a5ae5a9c25f7c6e15e8fb7ea930fce0003ce4b": {
+      "title": "rare-mother-tincture (Rubric of MIND)",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information; duplicate title in the database.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Metadata error: title collides with a different work."
+    },
+    "78e846f94f57b825219c1eb6422dd7a11ac5535fc320511305d8a3d7a514b100": {
+      "title": "Cancer Remedies in Materia Medica (Zubair Sb)",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "9cad626ec6a86e8a9da263952fef7ead6f473b1c71989a820c4f6f98510b23ad": {
+      "title": "all medical test description",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "c0de7afd45cd8bffa5747a1248f5ccf15eea9c6bfed461cde3ebb81ad0701ac9": {
+      "title": "CondensedMateriaMedica_10861500",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "0f690c343e9cd6d74bbcd9012531de50a08aa4b11d93b0d83a7d9a1fcdfdefae": {
+      "title": "crews_workbook",
+      "status": "blocked_unverified",
+      "basis": "Copyright and public-domain statements both appear; the edition is unresolved.",
+      "author_death_year": null,
+      "evidence": [
+        "Copyright notice",
+        "Public-domain claim"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Mixed signals."
+    },
+    "59fbfeda666e4ddf5ba39731cf671d5d18a892dd70347c788db37bdb0aee9440": {
+      "title": "domestic physician hering",
+      "status": "blocked_unverified",
+      "basis": "Hering died in 1880, but a copyright signal is present and the edition is unverified.",
+      "author_death_year": 1880,
+      "evidence": [
+        "Copyright notice"
+      ],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Re-examine the copyright page before clearing."
+    },
+    "eeb43ddd85a0e1c8803b3709e88e8db8368896cbc8e09b6a6759c39bd1feb57c": {
+      "title": "Homeopathy+during+pregnancy",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "995afc7fcbeddc9b35169f5376a22fc8615249e7668d58c53b69b83b1284e18b": {
+      "title": "HYDERABAD_HOMOEO_LECTURE",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "613d0271f8df1fc51c8f98883940d94d50c1cc2b08e297e9d8efd2079b3da25a": {
+      "title": "Introduction To Homeopathy",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "f8d96403b479fd9c3f95cde242b61564316a32a19b78f610c2f65724dde7c3e7": {
+      "title": "pulsatilla1",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "6293f5436bb96bec2ee1f3a62fca24d43662e289eddc5dc2c3c7b9ae6a59cc7a": {
+      "title": "Role of homeopathic mother tincture",
+      "status": "blocked_unverified",
+      "basis": "Modern journal article; rights are unverified.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Permission required."
+    },
+    "86ab69961ac779387a6db41b34cc3077555c37f46893aa3045af16b1d158896f": {
+      "title": "SYMPTOMS OF THE MIND",
+      "status": "blocked_unverified",
+      "basis": "No author, edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    },
+    "a65e2c1199717720d296144ffaff285c6893e070d986481dee93596c6c221b73": {
+      "title": "Antidote List",
+      "status": "blocked_unverified",
+      "basis": "Author recorded only as 'Steve'; no edition or licence information.",
+      "author_death_year": null,
+      "evidence": [],
+      "legal_review": "required",
+      "exportable": false,
+      "notes": "Unverified."
+    }
+  }
+}

@@ -50,13 +50,7 @@ ingestion only after you approve the spend. The Kent Repertory still needs inges
 
 ## 5. Run
 
-```powershell
-cd backend; uv run uvicorn app.main:app --reload
-```
-
-```powershell
-cd frontend; npm run dev
-```
+On Windows, run `start-dev.bat` from the project folder. The launcher uses backend port 8011 and frontend port 3000. If either service is already listening on its port, the launcher leaves that service running.
 
 Restart `npm run dev` if styles look stale after a production build.
 

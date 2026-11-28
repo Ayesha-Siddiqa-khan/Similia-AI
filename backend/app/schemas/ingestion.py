@@ -30,22 +30,6 @@ class IngestionLimits(BaseModel):
     provider_pause_reason: str | None = None
 
 
-class BookIndexStats(BaseModel):
-    book_id: str
-    title: str
-    category: str
-    source_filename: str
-    total_pages: int | None = None
-    total_chunks: int = 0
-    embedded_chunks: int = 0
-    pending_chunks: int = 0
-    embedded_tokens: int = 0
-    pending_tokens: int = 0
-    prepared: bool = False  # text has been split into chunks
-    complete: bool = False  # every chunk has a vector: fully searchable
-    frozen_plan: bool = False  # belongs to the command-line pipeline
-
-
 class JobOut(BaseModel):
     id: str
     book_id: str
@@ -64,6 +48,39 @@ class JobOut(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     heartbeat_at: datetime | None = None
+
+
+class AutoState(BaseModel):
+    """Automatic resume for one book: on or off, its place in the queue, why it stopped."""
+
+    enabled: bool = False
+    position: int | None = None  # 1 = next (or running now)
+    since: str | None = None
+    failures: int = 0
+    note: str | None = None  # why it ended or what went wrong, in plain words
+
+
+class BookIndexStats(BaseModel):
+    book_id: str
+    title: str
+    category: str
+    source_filename: str
+    total_pages: int | None = None
+    total_chunks: int = 0
+    embedded_chunks: int = 0
+    pending_chunks: int = 0
+    embedded_tokens: int = 0
+    pending_tokens: int = 0
+    prepared: bool = False  # text has been split into chunks
+    complete: bool = False  # every chunk has a vector: fully searchable
+    frozen_plan: bool = False  # belongs to the command-line pipeline
+    # One plain state for the list: running, stalled, paused, error, interrupted, complete,
+    # partial, ready, not_prepared. `detail` says why; `idle_seconds` is time since last report.
+    state: str = "ready"
+    detail: str | None = None
+    idle_seconds: int | None = None
+    latest_job: JobOut | None = None
+    auto_resume: AutoState = Field(default_factory=AutoState)
 
 
 class EventOut(BaseModel):
@@ -139,3 +156,37 @@ class TextPreview(BaseModel):
     offset: int
     limit: int
     pages: list[PageTextOut]
+
+
+class AutoStartRequest(BaseModel):
+    """Explicit confirmation to keep embedding these books automatically."""
+
+    book_ids: list[str] = Field(min_length=1, max_length=50)
+    confirmed: bool = False
+
+
+class AutoStopRequest(BaseModel):
+    book_ids: list[str] | None = None  # None = stop everything
+
+
+class AutoQueuedBook(BaseModel):
+    book_id: str
+    title: str
+    pending_chunks: int
+    pending_tokens: int
+
+
+class AutoSkippedBook(BaseModel):
+    book_id: str
+    title: str | None = None
+    reason: str
+
+
+class AutoStartOut(BaseModel):
+    queued: list[AutoQueuedBook]
+    skipped: list[AutoSkippedBook] = Field(default_factory=list)
+    total_pending_tokens: int
+
+
+class AutoStopOut(BaseModel):
+    stopped: list[str]

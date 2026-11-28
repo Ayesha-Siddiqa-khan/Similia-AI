@@ -30,8 +30,8 @@ def _read_db_flag() -> dict[str, Any] | None | bool:
     try:
         row = knowledge_db.get_system_flag(get_supabase_admin_client(), FLAG)
         return row if row is not None else {"paused": False}  # no row: nothing ever set a stop
-    except Exception:  # unreadable (network, or the migration is not applied yet)
-        logger.exception("Could not read the provider stop flag; treating the provider as paused")
+    except Exception as exc:  # unreadable (network, or the migration is not applied yet)
+        logger.warning("Provider stop unreadable (%s). Holding embeddings.", type(exc).__name__)
         return False
 
 

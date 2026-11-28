@@ -44,6 +44,7 @@ def test_every_ingestion_endpoint_requires_a_verified_operator() -> None:
     client = TestClient(create_app())
     for path in (
         "/api/ingestion/overview",
+        "/api/ingestion/books/list.pdf",
         f"/api/books/{UNKNOWN}/ingestion",
         f"/api/books/{UNKNOWN}/chunks",
         f"/api/books/{UNKNOWN}/text",
@@ -80,6 +81,22 @@ def test_upload_prepare_confirm_and_run_end_to_end_with_a_mock_provider(env: Env
     assert stats["plan"]["stats"]["complete"] is True and stats["jobs"][0]["id"] == job["id"]
     events = env.client.get(f"/api/ingestion-jobs/{job['id']}/events").json()
     assert {"started", "completed"} <= {e["kind"] for e in events}
+
+
+def test_the_book_list_pdf_lists_every_pdf_document_name(env: Env) -> None:
+    import pymupdf
+
+    env.upload()
+    response = env.client.get("/api/ingestion/books/list.pdf")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "ingestion-book-list.pdf" in response.headers["content-disposition"]
+    assert response.content.startswith(b"%PDF")
+    with pymupdf.open(stream=response.content, filetype="pdf") as document:
+        text = "\n".join(page.get_text() for page in document)
+    assert "Ingestion book list" in text
+    assert "Organon (sample)" in text and "organon.txt" in text
+    assert env.embedder.document_calls == []  # the list costs nothing
 
 
 def test_starting_without_confirmation_is_refused_and_sends_nothing(env: Env) -> None:
@@ -213,7 +230,7 @@ def test_search_flags_partly_indexed_books_with_pdf_pages(
         def search(self, *_args, **_kwargs):
             return [passage], 5
 
-    monkeypatch.setattr(knowledge, "VectorRetriever", FakeRetriever)
+    monkeypatch.setattr("app.ai.rag.retrieval.VectorRetriever", FakeRetriever)
     monkeypatch.setattr(knowledge, "get_embedding_provider", lambda: env.embedder)
     monkeypatch.setattr(knowledge, "embedding_paused", lambda: False)
     monkeypatch.setattr(knowledge.knowledge_db, "save_retrieval_evaluation", lambda *_a: None)
@@ -223,3 +240,50 @@ def test_search_flags_partly_indexed_books_with_pdf_pages(
     hit = body["results"][0]
     assert hit["page_start"] == 3 and hit["page_end"] == 4 and hit["book_complete"] is False
     assert body["incomplete_books"] == ["Organon (sample)"]
+
+
+def test_auto_resume_endpoints_need_confirmation_and_can_be_stopped(env: Env) -> None:
+    from app.ai.ingestion.auto import AutoResume
+
+    auto = AutoResume(env.service)
+    env.client.app.dependency_overrides[knowledge.get_auto_resume] = lambda: auto
+    book = env.upload()
+    env.client.post(f"/api/books/{book['id']}/prepare")
+    refused = env.client.post("/api/ingestion/auto", json={"book_ids": [book["id"]]})
+    assert refused.status_code == 409 and env.db.jobs == {}
+    started = env.client.post(
+        "/api/ingestion/auto", json={"book_ids": [book["id"]], "confirmed": True}
+    )
+    assert started.status_code == 200
+    body = started.json()
+    assert body["queued"][0]["book_id"] == book["id"] and body["total_pending_tokens"] > 0
+    overview = env.client.get("/api/ingestion/overview").json()
+    row = next(b for b in overview["books"] if b["book_id"] == book["id"])
+    assert row["auto_resume"]["enabled"] is True and row["auto_resume"]["position"] == 1
+    assert row["state"] == "queued"  # waiting its turn in the automatic queue
+    stopped = env.client.post("/api/ingestion/auto/stop", json={"book_ids": [book["id"]]})
+    assert stopped.status_code == 200 and stopped.json()["stopped"] == [book["id"]]
+    after = env.client.get("/api/ingestion/overview").json()
+    assert (
+        next(b for b in after["books"] if b["book_id"] == book["id"])["auto_resume"]["enabled"]
+        is False
+    )
+
+
+def test_auto_resume_is_refused_while_the_provider_stop_is_set(env: Env) -> None:
+    from app.ai.ingestion.auto import AutoResume
+
+    env.service.provider_pause = lambda: "The embedding provider stop is set."
+    env.client.app.dependency_overrides[knowledge.get_auto_resume] = lambda: AutoResume(env.service)
+    book = env.upload()
+    env.client.post(f"/api/books/{book['id']}/prepare")
+    response = env.client.post(
+        "/api/ingestion/auto", json={"book_ids": [book["id"]], "confirmed": True}
+    )
+    assert response.status_code == 429
+
+
+def test_auto_resume_endpoints_require_sign_in() -> None:
+    client = TestClient(create_app())
+    assert client.post("/api/ingestion/auto", json={"book_ids": ["x"]}).status_code == 401
+    assert client.post("/api/ingestion/auto/stop", json={}).status_code == 401

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:;"
+    />
+    <title>Similia AI</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at 30% 20%, #134e4a 0%, #0f172a 55%, #020617 100%);
+        color: #e2e8f0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+      }
+      main { width: 100%; padding: 36px 40px; }
+      .mark {
+        width: 52px; height: 52px; border-radius: 14px;
+        display: grid; place-items: center;
+        background: linear-gradient(135deg, #14b8a6, #0d9488);
+        color: #042f2e; font-weight: 800; font-size: 24px;
+        box-shadow: 0 12px 30px rgba(20, 184, 166, 0.35);
+      }
+      h1 { margin: 18px 0 6px; font-size: 22px; letter-spacing: 0.2px; }
+      p { margin: 0; color: #94a3b8; font-size: 13px; line-height: 1.5; }
+      .status { margin-top: 26px; display: flex; align-items: center; gap: 10px; color: #cbd5e1; font-size: 13px; }
+      .spinner {
+        width: 15px; height: 15px; border-radius: 50%;
+        border: 2px solid rgba(148, 163, 184, 0.35);
+        border-top-color: #2dd4bf;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .foot { margin-top: 22px; font-size: 11px; color: #64748b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark">S</div>
+      <h1>Similia AI</h1>
+      <p>Local clinical workspace. Your patient data stays in your Supabase project.</p>
+      <div class="status"><span class="spinner"></span><span id="status">Starting…</span></div>
+      <div class="foot">Offline speech recognition runs on this computer.</div>
+    </main>
+  </body>
+</html>

@@ -83,15 +83,34 @@ copy .env.example .env.local # fill in real values later; app boots without it
 
 | Task                | Command                                              |
 | ------------------- | ---------------------------------------------------- |
-| Backend dev server  | `cd backend; uv run uvicorn app.main:app --reload`   |
+| Start local services (Windows) | `start-dev.bat` |
+| Backend dev server  | `cd backend; uv run uvicorn app.main:app --host 127.0.0.1 --port 8011 --reload --reload-dir app` |
 | Backend tests       | `cd backend; uv run pytest`                          |
 | Backend lint        | `cd backend; uv run ruff check .`                    |
-| Frontend dev server | `cd frontend; npm run dev`                           |
+| Frontend dev server | `cd frontend; $env:API_BASE_URL = "http://127.0.0.1:8011"; npm run dev` |
 | Frontend tests      | `cd frontend; npm test`                              |
 | Frontend lint       | `cd frontend; npm run lint`                          |
 | Frontend typecheck  | `cd frontend; npm run typecheck`                     |
 | Frontend build      | `cd frontend; npm run build`                         |
-| API docs            | http://localhost:8000/docs (Swagger)                 |
+| Local API docs      | http://127.0.0.1:8011/docs (Swagger)                  |
+
+## Windows desktop app
+
+The app can be packaged as a self-contained x64 Windows installer (Electron +
+Next.js standalone server + PyInstaller backend). No Python or Node.js is
+needed on the target computer.
+
+```powershell
+npm --prefix desktop install
+cd backend; uv sync --group speech --group packaging; cd ..
+$env:NEXT_PUBLIC_SUPABASE_URL = "https://<project>.supabase.co"
+$env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_..."
+npm run dist:win          # → release/Similia AI Setup 1.0.0.exe
+```
+
+See [`docs/desktop-packaging.md`](docs/desktop-packaging.md) for the full build,
+first-run configuration, speech-model setup, security model and verification
+checklist.
 
 ## Environment variables
 

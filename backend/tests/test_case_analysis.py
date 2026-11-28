@@ -9,7 +9,7 @@ from app.ai.rag.case_analysis import (
     build_case_text,
     screen_red_flags,
 )
-from app.ai.rag.retrieval import RetrievedPassage
+from app.ai.rag.retrieval import RetrievedPassage, analysis_search_info
 
 
 def passage(chunk_id: str, similarity: float = 0.8) -> RetrievedPassage:
@@ -127,12 +127,59 @@ def test_no_retrieved_passages_skips_ranking():
     assert result.outcome == "insufficient_sources" and reasoner.rank_calls == 0
 
 
+def test_late_fallback_preserves_the_semantic_passage_and_records_both_modes():
+    sem, kw = passage("same", 0.75), passage("same", 999)
+    kw.retrieval_mode = "keyword"
+
+    class LateFallback:
+        requested = "semantic"
+        mode = "semantic"
+        fallback_reason = None
+
+        def search(self, query, **_kwargs):
+            if query == "first":
+                return [sem], 0
+            self.mode = "keyword"
+            self.fallback_reason = "Voyage temporarily unavailable"
+            return [kw], 0
+
+    reasoner = FakeReasoner(NormalisedCase(queries=[
+        SearchQuery(text="first"), SearchQuery(text="first"), SearchQuery(text="second"),
+    ]))
+    result = CaseAnalyzer(LateFallback(), reasoner).analyze(case())
+    assert result.queries == ["first", "second"]
+    assert result.passages[0]["similarity"] == 0.75
+    assert result.passages[0]["retrieval_mode"] == "semantic"
+    assert result.retrieval == {
+        "requested_mode": "semantic", "retrieval_mode": "mixed",
+        "fallback_reason": "Voyage temporarily unavailable",
+    }
+
+
+def test_empty_fallback_and_historical_metadata_are_reported_without_guessing():
+    retriever = FakeRetriever([])
+    retriever.requested = "semantic"
+    retriever.mode = "keyword"
+    retriever.fallback_reason = "Voyage unavailable"
+    reasoner = FakeReasoner(NormalisedCase(queries=[SearchQuery(text="fixture")]))
+    result = CaseAnalyzer(retriever, reasoner).analyze(case())
+    snapshot = {
+        "queries": {"phrases": result.queries, "retrieval": result.retrieval},
+        "passages": [],
+    }
+    assert analysis_search_info(snapshot)["retrieval_mode"] == "keyword"
+    assert analysis_search_info(snapshot)["fallback_reason"] == "Voyage unavailable"
+    assert analysis_search_info({"queries": ["fixture"], "passages": []})["retrieval_mode"] == (
+        "unknown"
+    )
+
+
 def test_duplicate_chunks_across_queries_are_deduplicated_and_capped():
     queries = [SearchQuery(text=f"q{i}") for i in range(12)]
     reasoner = FakeReasoner(NormalisedCase(queries=queries))
     retriever = FakeRetriever([passage("c1")])
     result = CaseAnalyzer(retriever, reasoner).analyze(case())
-    assert len(retriever.queries) == 8  # MAX_QUERIES
+    assert len(retriever.queries) == 5  # Four primary concepts plus a thin-evidence follow-up.
     assert len(reasoner.passage_ids) == 1 and len(result.passages) == 1
 
 

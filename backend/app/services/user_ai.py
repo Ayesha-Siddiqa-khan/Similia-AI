@@ -1,17 +1,29 @@
-"""Bring-your-own AI key: store, verify and use each practitioner's own Anthropic key.
+"""Bring-your-own AI key: store, verify and use each practitioner's provider key.
 
 The plaintext key exists only (a) in the request that saves it, (b) briefly in memory when that
 user's AI call is made. It is encrypted at rest (see app.core.vault) and never returned by any
 endpoint, only its last four characters.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol
 
+import httpx
+
 from app.core.vault import VaultError, decrypt_secret
-from app.services.llm import AnthropicLLMProvider
+from app.services.compatible_llm import (
+    COMPATIBLE_PROVIDERS,
+    MODEL_ID_PATTERN,
+    CompatibleLLMProvider,
+)
+from app.services.llm import AnthropicLLMProvider, LLMProvider
 
 PROVIDER = "anthropic"
+PROVIDERS = {
+    PROVIDER: "Anthropic",
+    **{key: value.label for key, value in COMPATIBLE_PROVIDERS.items()},
+}
 DEFAULT_MODEL = "claude-sonnet-5-5"
 ALLOWED_MODELS: dict[str, str] = {
     "claude-sonnet-5-5": "Claude Sonnet 5.5 (recommended: quality and cost balance)",
@@ -65,6 +77,7 @@ class ProviderUnavailableError(RuntimeError):
 class UserAIStore(Protocol):
     def get(self, owner: str) -> dict[str, Any] | None: ...
     def save(self, owner: str, row: dict[str, Any]) -> None: ...
+    def update(self, owner: str, provider: str, changes: dict[str, Any]) -> bool: ...
     def delete(self, owner: str) -> None: ...
 
 
@@ -89,9 +102,19 @@ class SupabaseUserAIStore:
     def delete(self, owner: str) -> None:
         self._db.table("user_ai_settings").delete().eq("practitioner_id", owner).execute()
 
+    def update(self, owner: str, provider: str, changes: dict[str, Any]) -> bool:
+        result = (
+            self._db.table("user_ai_settings")
+            .update({**changes, "updated_at": datetime.now(timezone.utc).isoformat()})
+            .eq("practitioner_id", owner)
+            .eq("provider", provider)
+            .execute()
+        )
+        return bool(result.data)
+
 
 def verify_anthropic_key(api_key: str) -> None:
-    """Ask Anthropic to list one model with this key: free, and proves the key works."""
+    """Check whether Anthropic accepts the key for a model-list request."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=15.0)
@@ -103,15 +126,56 @@ def verify_anthropic_key(api_key: str) -> None:
         raise ProviderUnavailableError("Could not reach Anthropic to verify the key") from None
 
 
-def provider_for(owner: str, store: UserAIStore) -> AnthropicLLMProvider:
+def verify_provider_key(api_key: str, provider: str) -> None:
+    if provider == PROVIDER:
+        verify_anthropic_key(api_key)
+        return
+    try:
+        CompatibleLLMProvider(provider, "", api_key).verify()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 401, 403):
+            raise KeyRejectedError("The provider did not accept the key") from None
+        raise ProviderUnavailableError("The key could not be verified") from None
+    except (httpx.RequestError, UnicodeError):
+        raise ProviderUnavailableError("The key could not be verified") from None
+
+
+def list_provider_models(api_key: str, provider: str) -> dict[str, str]:
+    import anthropic
+
+    try:
+        if provider == PROVIDER:
+            client = anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=15.0)
+            return {
+                model.id: model.display_name
+                for model in client.models.list(limit=100)
+                if model.id.startswith("claude-") and re.fullmatch(MODEL_ID_PATTERN, model.id)
+            }
+        return CompatibleLLMProvider(provider, "", api_key).models()
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        raise KeyRejectedError("The provider did not accept the key") from None
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 401, 403):
+            raise KeyRejectedError("The provider did not accept the key") from None
+        raise ProviderUnavailableError("The model list could not be loaded") from None
+    except (
+        anthropic.APIError, httpx.RequestError, AttributeError, KeyError, TypeError, ValueError
+    ):
+        raise ProviderUnavailableError("The model list could not be loaded") from None
+
+
+def provider_for(row: dict[str, Any] | None) -> LLMProvider:
     """The practitioner's own LLM provider, or NoUserKeyError / VaultError."""
-    row = store.get(owner)
     if row is None:
         raise NoUserKeyError("No AI key saved")
     if not is_active(row):
         raise KeyPausedError("AI key is paused")
-    model = row["model"] if row["model"] in ALLOWED_MODELS else DEFAULT_MODEL
-    return AnthropicLLMProvider(model=model, api_key=decrypt_secret(row["encrypted_api_key"]))
+    provider = row.get("provider", PROVIDER)
+    key = decrypt_secret(row["encrypted_api_key"])
+    if provider == PROVIDER:
+        model = row["model"] if row["model"].startswith("claude-") else DEFAULT_MODEL
+        return AnthropicLLMProvider(model=model, api_key=key)
+    return CompatibleLLMProvider(provider, row["model"], key)
 
 
 __all__ = [

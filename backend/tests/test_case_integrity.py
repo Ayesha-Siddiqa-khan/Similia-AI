@@ -26,7 +26,10 @@ def analyse(env: Env, case_id: str) -> dict:
 def sign_off(env: Env, case_id: str, analysis_id: str, remedy: str = "Belladonna"):
     return env.client.post(
         f"/api/cases/{case_id}/review",
-        json={"analysis_id": analysis_id, "decision": "accepted", "chosen_remedy": remedy},
+        json={
+            "analysis_id": analysis_id, "decision": "accepted", "chosen_remedy": remedy,
+            "practitioner_name": "Dr Test",
+        },
     )
 
 
@@ -111,7 +114,9 @@ def test_validation_errors_name_the_field_but_never_echo_the_text(env: Env):
 
 def test_api_docs_are_hidden_in_production_and_shown_in_development(monkeypatch):
     def settings(environment):
-        return SimpleNamespace(app_name="Similia", environment=environment, cors_origins_list=[])
+        return SimpleNamespace(
+            app_name="Similia", environment=environment, cors_origins_list=[], desktop_token=""
+        )
 
     monkeypatch.setattr(app_main, "get_settings", lambda: settings("production"))
     prod = TestClient(app_main.create_app())

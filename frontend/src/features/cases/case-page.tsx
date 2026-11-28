@@ -1,24 +1,29 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Sparkles } from "lucide-react";
 import { Badge, Loading, Notice, Panel } from "@/components/ui";
+import { ProgressDots } from "@/components/progress-dots";
 import { ApiError } from "@/lib/backend";
+import { clinicalPath, clinicalQueryKey, useClinicalWorkflow } from "./clinical-api";
+import { ClinicalPhotos } from "./clinical-photos";
 import { AnalysisView } from "./analysis-view";
 import { EarlierAnalyses } from "./earlier-analyses";
 import { ApiErrorNotice } from "./api-error-notice";
 import { patch, post, put, useCase, useLatestAnalysis, usePatient } from "./api";
-import { patientPath, statusLabel, statusTone } from "./paths";
+import { patientPath, reportPath, statusLabel, statusTone } from "./paths";
 import { kindLabel, SymptomEditor } from "./symptom-editor";
 import { SuggestedQuestions, type QuestionStep } from "./suggested-questions";
 import { Bi, UrduLine } from "./bilingual";
+import { type SearchMode, searchModeOptions } from "./search-method";
 import { answeredCount, askedQuestions, type Draft, MAX_SYMPTOMS, questionNotes, toSavePayload } from "./case-draft";
 import { newKey } from "./symptom-key";
 import { type AutosaveState, useAutosave } from "./use-autosave";
 import { URDU_PREF_KEY, urLabels } from "./urdu-labels";
-import { MicButton } from "./voice-input";
+import { LocalMicButton } from "@/features/speech";
 import { AutoTextarea } from "@/components/auto-textarea";
 import { useLocalPref } from "@/lib/use-local-pref";
 import type { Analysis, CaseRecord, FollowUpQuestion, FollowUps, Symptom, SymptomKind } from "./types";
@@ -37,6 +42,9 @@ const hasUrdu = (q: FollowUps) => [q.mental, q.physical_general, q.particular, q
 
 function CaseEditor({ initial }: { initial: CaseRecord }) {
   const client = useQueryClient();
+  const router = useRouter();
+  const clinical = useClinicalWorkflow(initial.id, true).data?.enabled === true;
+  const [openingReports, setOpeningReports] = useState(false);
   const analysisQuery = useLatestAnalysis(initial.id);
   const caseQuery = useCase(initial.id);
   const status = caseQuery.data?.status ?? initial.status;
@@ -44,7 +52,10 @@ function CaseEditor({ initial }: { initial: CaseRecord }) {
   const archived = !!patientQuery.data?.archived_at; // an archived patient's cases are read-only
   const signedOff = status === "signed_off"; // a signed-off record is read-only until it is reopened
   const locked = signedOff || archived;
-  const [step, setStep] = useState(0);
+  const [savedStep, saveStep] = useLocalPref(`similia.case-step.${initial.id}`, steps[0].id);
+  const step = Math.max(0, steps.findIndex(({ id }) => id === savedStep));
+  const setStep = (index: number) => saveStep(steps[index].id);
+  const [searchMode, setSearchMode] = useState<SearchMode>("semantic");
   const [complaint, setComplaint] = useState(initial.chief_complaint);
   const [symptoms, setSymptoms] = useState<Symptom[]>(initial.symptoms);
   // The newest draft lives in a ref so saves never send stale text; state only drives the screen.
@@ -90,7 +101,8 @@ function CaseEditor({ initial }: { initial: CaseRecord }) {
   const analyze = useMutation({
     mutationFn: async (acknowledge: boolean) => {
       await autosave.saveNow();
-      return post<Analysis>(`cases/${initial.id}/analyze${acknowledge ? "?acknowledge_red_flags=true" : ""}`);
+      const query = new URLSearchParams({ search_mode: searchMode, ...(acknowledge ? { acknowledge_red_flags: "true" } : {}) });
+      return post<Analysis>(`cases/${initial.id}/analyze?${query.toString()}`);
     },
     onSuccess: (analysis) => {
       client.setQueryData(["analysis", initial.id], analysis);
@@ -108,7 +120,10 @@ function CaseEditor({ initial }: { initial: CaseRecord }) {
   };
   const suggestions = (step?: QuestionStep) => <SuggestedQuestions step={step} questions={questions} loading={suggest.isPending} error={suggest.isError ? suggest.error : null} canSuggest={complaint.trim().length > 0} asked={atLimit ? undefined : askedQuestions(symptoms)} full={atLimit} urdu={urdu} onUrduChange={changeUrdu} onSuggest={() => suggest.mutate(urdu)} onUse={(q) => step && addQuestion(step, q)} />;
   const current = steps[step];
-  const analysis = analyze.data ?? analysisQuery.data ?? null;
+  const analysis = analysisQuery.data ?? analyze.data ?? null;
+  const acknowledging = analyze.isPending && analyze.variables === true;
+  const runningAnalysis = analyze.isPending && !acknowledging;
+  const acknowledgementError = analyze.isError && analyze.variables === true && analysis?.outcome === "red_flag" ? analyze.error : null;
   const entered = answeredCount(symptoms);
   const canAnalyze = !locked && (complaint.trim() || entered > 0);
 
@@ -119,15 +134,30 @@ function CaseEditor({ initial }: { initial: CaseRecord }) {
       </nav>
       <Panel title={<Bi en={current.title} ur={urLabels.steps[current.id].title} show={urdu} />} description={<>{current.hint}<UrduLine text={urLabels.steps[current.id].hint} show={urdu} /></>} action={<span className={`save-state save-${saveState}`} role="status"><Bi en={saveText[saveState]} ur={urLabels.save[saveState]} show={urdu} />{saveState === "error" && <> <button type="button" className="text-link" onClick={() => { autosave.saveNow().catch(() => {}); }}>Save now</button><span className="save-reason"> ({autosave.error})</span>{/sign in|session/i.test(autosave.error) && <> <Link className="text-link" href="/login" target="_blank" rel="noopener noreferrer">Sign in again (your work stays here)</Link></>}</>}</span>}>
         <div className="panel-padding">
-          {current.id === "complaint" && <><div className="field"><label htmlFor="complaint">What brings the patient in?{urdu && <> · <bdi className="urdu-inline" lang="ur" dir="rtl">{urLabels.chiefComplaint}</bdi></>}</label>{!locked && <MicButton onText={(text) => { const prev = draft.current.complaint; changeDraft({ complaint: `${prev}${prev && !/\s$/.test(prev) ? " " : ""}${text}`.slice(0, 2000) }); }} />}<AutoTextarea id="complaint" dir="auto" minRows={7} maxLength={2000} value={complaint} disabled={locked} placeholder={`Write it in the patient’s own words. Example: “I am 15 years old. For two years I have had itchy, dry skin behind my knees and on my elbows. It gets worse in winter and when I scratch it, and a sticky yellow fluid comes out.”${urdu ? `\n${urLabels.chiefComplaintExample}` : ""}`} onChange={(e) => changeDraft({ complaint: e.target.value })} /></div>{suggestions()}{questions && questions.red_flags.length === 0 && <p className="fine-print">Questions are ready. Continue to the next steps to see them.</p>}</>}
+          {current.id === "complaint" && <><div className="field"><label htmlFor="complaint">What brings the patient in?{urdu && <> · <bdi className="urdu-inline" lang="ur" dir="rtl">{urLabels.chiefComplaint}</bdi></>}</label>{!locked && <LocalMicButton onText={(text) => { const prev = draft.current.complaint; changeDraft({ complaint: `${prev}${prev && !/\s$/.test(prev) ? " " : ""}${text}`.slice(0, 2000) }); }} />}<AutoTextarea id="complaint" dir="auto" minRows={7} maxLength={2000} value={complaint} disabled={locked} placeholder={`Write it in the patient’s own words. Example: “I am 15 years old. For two years I have had itchy, dry skin behind my knees and on my elbows. It gets worse in winter and when I scratch it, and a sticky yellow fluid comes out.”${urdu ? `\n${urLabels.chiefComplaintExample}` : ""}`} onChange={(e) => changeDraft({ complaint: e.target.value })} /></div>{suggestions()}{questions && questions.red_flags.length === 0 && <p className="fine-print">Questions are ready. Continue to the next steps to see them.</p>}</>}
           {current.questionStep && suggestions(current.questionStep)}
+          {current.id === "complaint" && clinical && <ClinicalPhotos caseId={initial.id} locked={locked} />}
           {current.kinds?.map((kind) => <div key={kind}>{current.kinds!.length > 1 && <h3><Bi en={kindLabel[kind]} ur={urLabels.kinds[kind]} show={urdu} /></h3>}<SymptomEditor kind={kind} symptoms={symptoms} onChange={edit} disabled={locked} /></div>)}
           {current.id === "analyze" && (
             <div className="stack">
               <dl className="measurements"><div><dt>Chief complaint</dt><dd>{complaint || "Not recorded"}</dd></div><div><dt>Entries recorded (answered)</dt><dd>{entered}</dd></div><div><dt>Key symptoms</dt><dd>{symptoms.filter((s) => s.weight === 3 && s.label.trim()).map((s) => s.label).join(", ") || "None marked"}</dd></div></dl>
-              {!locked && <button className="button primary" disabled={!canAnalyze || analyze.isPending} onClick={() => analyze.mutate(false)}><Sparkles size={16} />{analyze.isPending ? "Retrieving sources and analysing…" : analysis ? "Run analysis again" : "Run analysis"}</button>}
+              {clinical && <div><button className="button primary" type="button" disabled={openingReports} onClick={async () => {
+                setOpeningReports(true);
+                try {
+                  if (!locked) await autosave.saveNow();
+                  await client.invalidateQueries({ queryKey: clinicalQueryKey(initial.id) });
+                  router.push(clinicalPath(initial.id));
+                } catch {
+                  // The autosave notice keeps the failure visible on the case.
+                } finally {
+                  setOpeningReports(false);
+                }
+              }}><FileText size={16} /> Clinical reports {openingReports && <ProgressDots />}</button></div>}
+              {!clinical && !locked && <div className="field"><label htmlFor="search-mode">Search method</label><select id="search-mode" value={searchMode} onChange={(e) => setSearchMode(e.target.value as SearchMode)}>{searchModeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select><p className="fine-print">If meaning-based search cannot be used, keyword matching runs instead and the result says so.</p></div>}
+              {!clinical && !locked && <button className="button primary" disabled={!canAnalyze || analyze.isPending} aria-busy={runningAnalysis} onClick={() => analyze.mutate(false)}>{runningAnalysis ? <>Analysing <ProgressDots /></> : <><Sparkles size={16} />{analysis ? "Run analysis again" : "Run analysis"}</>}</button>}
+              {analysis && analysis.outcome !== "red_flag" && <Link className="button secondary" href={reportPath(initial.id)} target="_blank" rel="noopener noreferrer"><FileText size={16} />Report</Link>}
               {!canAnalyze && !locked && <p className="fine-print">Add a chief complaint or at least one symptom first.</p>}
-              {analyze.isError && <ApiErrorNotice error={analyze.error} />}
+              {analyze.isError && !acknowledgementError && <ApiErrorNotice error={analyze.error} />}
             </div>
           )}
         </div>
@@ -138,7 +168,18 @@ function CaseEditor({ initial }: { initial: CaseRecord }) {
       </Panel>
       {archived && <Notice><strong>This patient is archived (read-only).</strong> This case cannot be changed or analysed. Re-grant consent on the patient&apos;s page to reopen the record.</Notice>}
       {signedOff && <Notice><strong>This case is signed off and locked.</strong> Its record cannot be changed. To correct it, reopen it: it becomes a draft and needs a new analysis and sign-off. <button type="button" className="button secondary" disabled={reopen.isPending} onClick={() => reopen.mutate()}>{reopen.isPending ? "Reopening…" : "Reopen case"}</button>{reopen.isError && <span className="field-error" role="alert"> {reopen.error.message}</span>}</Notice>}
-      {current.id === "analyze" && analysis && <AnalysisView analysis={analysis} caseId={initial.id} status={status} acknowledging={analyze.isPending} onAcknowledge={() => analyze.mutate(true)} />}
+      {current.id === "analyze" && !clinical && analysis && (
+        <AnalysisView
+          analysis={analysis}
+          caseId={initial.id}
+          status={status}
+          acknowledging={acknowledging}
+          analysisPending={analyze.isPending}
+          onAcknowledge={() => analyze.mutate(true)}
+          acknowledgementError={acknowledgementError}
+          patient={patientQuery.data}
+        />
+      )}
       <EarlierAnalyses caseId={initial.id} />
     </>
   );

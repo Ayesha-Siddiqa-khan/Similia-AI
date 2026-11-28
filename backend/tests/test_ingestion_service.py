@@ -669,3 +669,100 @@ def test_the_book_history_lists_jobs_and_events_newest_first(
 
 def test_run_ingestion_records_vanished_job(service: IngestionService) -> None:
     service.run_ingestion("ghost-job")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Clear book states: running, stalled, paused, error, interrupted, complete
+# ---------------------------------------------------------------------------
+
+
+def _stats(**kw) -> dict:
+    base = {"prepared": True, "complete": False, "embedded_chunks": 5}
+    return {**base, **kw}
+
+
+def test_every_book_gets_one_clear_state_and_a_reason() -> None:
+    state = IngestionService.index_state
+    live = {"status": "running", "heartbeat_at": _old(10)}
+    assert state(_stats(), live)["state"] == "running"
+    assert state(_stats(), {"status": "pending", "heartbeat_at": None})["state"] == "running"
+    stalled = state(_stats(), {"status": "running", "heartbeat_at": _old(400)})
+    assert stalled["state"] == "stalled" and "No progress reported" in stalled["detail"]
+    paused = state(_stats(), {"status": "paused", "stop_reason": "Token limit reached"})
+    assert paused == {"state": "paused", "detail": "Token limit reached", "idle_seconds": None}
+    error = state(_stats(), {"status": "failed", "stop_reason": "error", "error": "Boom"})
+    assert error["state"] == "error" and error["detail"] == "Boom"
+    interrupted = state(_stats(), {"status": "failed", "stop_reason": "interrupted"})
+    assert interrupted["state"] == "interrupted"
+    assert state(_stats(complete=True), {"status": "failed"})["state"] == "complete"
+    assert state(_stats(prepared=False), None)["state"] == "not_prepared"
+    assert state(_stats(embedded_chunks=0), None)["state"] == "ready"
+    assert state(_stats(), None)["state"] == "partial"
+
+
+def test_the_error_detail_never_carries_a_key() -> None:
+    job = {"status": "failed", "stop_reason": "error", "error": "bad key al-abcdef1234567890XYZ"}
+    detail = IngestionService.index_state(_stats(), job)["detail"]
+    assert "al-abcdef1234567890XYZ" not in detail and "[redacted]" in detail
+
+
+def test_a_command_line_job_is_never_marked_interrupted_by_the_stale_check(
+    service: IngestionService, fake_db
+) -> None:
+    book = prepared(service)
+    cli_job = fake_db.create_ingestion_job(book["id"])  # no heartbeat, no token limit
+    fake_db.jobs[cli_job["id"]].update(
+        status="running", created_at=_old(3600), started_at=_old(3600)
+    )
+    assert service.recover_stale_jobs() == 0
+    assert fake_db.get_ingestion_job(cli_job["id"])["status"] == "running"
+
+
+def test_the_overview_gives_each_book_its_state_and_latest_job(
+    service: IngestionService, fake_db
+) -> None:
+    finished = prepared(service)
+    run_to_end(service, finished["id"])
+    working = prepared(service, text=ORGANON_SAMPLE + "\fAnother page.")
+    job = start(service, working["id"])
+    fake_db.jobs[job["id"]].update(status="running", heartbeat_at=_old(5))
+    untouched = register(service, text=REPERTORY_SAMPLE, category="repertory")
+    by_id = {b["book_id"]: b for b in service.overview()["books"]}
+    assert by_id[finished["id"]]["state"] == "complete"
+    assert by_id[working["id"]]["state"] == "running"
+    assert by_id[working["id"]]["latest_job"]["id"] == job["id"]
+    assert by_id[untouched["id"]]["state"] == "not_prepared"
+
+
+def test_a_queued_book_waits_and_an_old_failure_is_only_context() -> None:
+    state = IngestionService.index_state
+    failed = {"status": "failed", "stop_reason": "error", "error": "provider outage"}
+    queued = state(_stats(), failed, auto_enabled=True)
+    assert (
+        queued["state"] == "queued" and "Last attempt failed: provider outage" in queued["detail"]
+    )
+    assert state(_stats(), None, auto_enabled=True) == {
+        "state": "queued",
+        "detail": None,
+        "idle_seconds": None,
+    }
+    live = state(_stats(), {"status": "running", "heartbeat_at": _old(5)}, auto_enabled=True)
+    assert live["state"] == "running"
+    assert state(_stats(complete=True), failed, auto_enabled=True)["state"] == "complete"
+    assert state(_stats(), failed, auto_enabled=False)["state"] == "error"
+
+
+def test_a_wrapped_provider_error_names_the_real_cause_without_secrets() -> None:
+    class Limited(Exception):
+        http_status = 429
+
+    try:
+        try:
+            raise Limited("slow down key al-abcdef1234567890XYZ")
+        except Limited as inner:
+            raise RuntimeError("Voyage embedding failed after 5 attempts: Limited") from inner
+    except RuntimeError as outer:
+        details = provider_error_details(outer)
+    assert details["error_class"] == "RuntimeError" and details["http_status"] is None
+    assert details["cause_class"] == "Limited" and details["cause_http_status"] == 429
+    assert "al-abcdef1234567890XYZ" not in str(details)

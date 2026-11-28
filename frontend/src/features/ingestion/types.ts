@@ -31,6 +31,21 @@ export interface BookIndexStats {
   complete: boolean;
   frozen_plan: boolean;
 }
+export type BookState = "running" | "queued" | "stalled" | "paused" | "error" | "interrupted" | "complete" | "partial" | "ready" | "not_prepared";
+export interface AutoResumeInfo { enabled: boolean; position: number | null; since: string | null; failures: number; note: string | null }
+/** A book in the overview: index counts plus its live status and automatic-resume state. */
+export interface BookOverviewItem extends BookIndexStats {
+  state: BookState;
+  detail: string | null;
+  idle_seconds: number | null;
+  latest_job: JobOut | null;
+  auto_resume: AutoResumeInfo;
+}
+export interface AutoQueued { book_id: string; title: string; pending_chunks: number; pending_tokens: number }
+export interface AutoSkipped { book_id: string; title?: string; reason: string }
+export interface AutoRequest { book_ids: string[]; confirmed: boolean }
+export interface AutoResult { queued: AutoQueued[]; skipped: AutoSkipped[]; total_pending_tokens: number }
+export interface StopResult { stopped: string[] }
 export interface JobOut {
   id: string;
   book_id: string;
@@ -71,7 +86,7 @@ export interface PlanOut {
 }
 export interface StartRequest { confirmed: boolean; max_tokens?: number }
 export interface BookIngestionOut { plan: PlanOut; jobs: JobOut[]; events: EventOut[] }
-export interface OverviewOut { limits: IngestionLimits; books: BookIndexStats[]; active_jobs: JobOut[] }
+export interface OverviewOut { limits: IngestionLimits; books: BookOverviewItem[]; active_jobs: JobOut[] }
 export interface ChunkOut {
   id: string;
   chunk_index: number;

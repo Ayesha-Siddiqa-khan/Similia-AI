@@ -6,6 +6,7 @@ Nothing here prints or returns a secret: problems name the setting, never its va
 import logging
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 
@@ -19,7 +20,17 @@ class ConfigurationError(RuntimeError):
 
 
 def is_production(settings: Settings) -> bool:
-    return settings.environment.strip().lower() == "production"
+    """Production and the installed desktop app use the strict configuration checks."""
+    return settings.environment.strip().lower() in ("production", "desktop")
+
+
+def _is_loopback(origin: str) -> bool:
+    """True for the http://127.0.0.1 origins the desktop app uses."""
+    try:
+        host = (urlparse(origin).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
 
 
 def configuration_problems(settings: Settings) -> list[str]:
@@ -51,9 +62,15 @@ def configuration_problems(settings: Settings) -> list[str]:
     if "*" in origins:
         problems.append("CORS_ORIGINS must list the real site, not '*'.")
     if is_production(settings):
-        insecure = [o for o in origins if o.startswith("http://")]
+        desktop = settings.environment.strip().lower() == "desktop"
+        if desktop and not settings.desktop_token:
+            problems.append("SIMILIA_DESKTOP_TOKEN is not set.")
+        insecure = any(
+            origin.startswith("http://") and not (desktop and _is_loopback(origin))
+            for origin in origins
+        )
         if insecure:
-            problems.append("CORS_ORIGINS has http:// origins; production must use https://.")
+            problems.append("CORS_ORIGINS must use https:// outside desktop loopback.")
         if not settings.voyage_api_key:
             problems.append("VOYAGE_API_KEY is not set (search and analysis cannot run).")
     return problems

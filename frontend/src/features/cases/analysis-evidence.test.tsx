@@ -32,7 +32,22 @@ describe("analysis evidence", () => {
   });
   it("says so when passages were found by keyword matching", () => {
     mount(withEvidence({ retrieval_mode: "keyword" }, { retrieval_mode: "keyword" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(/keyword matching, not meaning-based search/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Keyword matching can miss passages/);
+  });
+  it("names the method that ran and explains a fallback from the one requested", () => {
+    mount(withEvidence({ retrieval_mode: "keyword" }, { retrieval_mode: "keyword", requested_mode: "hybrid", fallback_reason: "Meaning-based search was unavailable: APIError (HTTP 403)" }));
+    expect(screen.getByTestId("search-method")).toHaveTextContent("Search method used: Keyword (you asked for Hybrid)");
+    expect(screen.getByText(/Hybrid search could not be used, so Keyword matching ran instead\. Meaning-based search was unavailable: APIError \(HTTP 403\)/)).toBeInTheDocument();
+  });
+  it("says hybrid scores are rank scores", () => {
+    mount(withEvidence({ retrieval_mode: "hybrid", matched_by: ["semantic", "keyword"] }, { retrieval_mode: "hybrid", requested_mode: "hybrid" }));
+    expect(screen.getByTestId("search-method")).toHaveTextContent(/Hybrid.*rank scores/);
+    expect(screen.queryByText(/could not be used/)).not.toBeInTheDocument();
+  });
+  it("distinguishes a late keyword fallback from a fully keyword search", () => {
+    mount(withEvidence({}, { retrieval_mode: "mixed", requested_mode: "semantic", fallback_reason: "Voyage unavailable" }));
+    expect(screen.getByTestId("search-method")).toHaveTextContent("Mixed (you asked for Semantic)");
+    expect(screen.getByRole("alert")).toHaveTextContent(/ran for some queries.*keyword fallback.*Voyage unavailable/);
   });
   it("shows no keyword warning for meaning-based results", () => {
     mount(withEvidence({}));

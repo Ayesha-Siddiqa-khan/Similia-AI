@@ -30,12 +30,14 @@ from app.ai.ingestion.cleaning import clean_pages
 from app.ai.ingestion.extraction import PAGE_SEPARATOR, ExtractionError, PageText, extract_document
 from app.ai.rag import guard
 from app.services import knowledge_db
-from app.services.embeddings import EmbeddingProvider
+from app.services.embeddings import EmbeddingProvider, VoyageEmbeddingProvider, quota_exhausted
+from app.services.voyage_budget import VoyageBudgetUnavailable
 
 logger = logging.getLogger(__name__)
 
 CATEGORIES = ("materia_medica", "repertory", "organon", "general")
 ACTIVE = ("pending", "running")
+STALLED_SECONDS = 120  # a running web job reports about every 20 s; 2 min of silence is a stall
 STALE_JOB_SECONDS = 300  # a running job with no heartbeat for this long is treated as interrupted
 SAFETY_MARGIN = 1.25  # the ~4 characters per token estimate can run low; stop a little early
 PROGRESS_EVENT_EVERY = 10  # batches between "progress" history entries
@@ -111,11 +113,20 @@ def provider_error_details(exc: Exception) -> dict[str, Any]:
         retry_after = headers.get("Retry-After") or headers.get("retry-after")
     except AttributeError:
         pass
+    cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else None
     return {
         "error_class": type(exc).__name__,
         "http_status": status,
         "retry_after_seconds": retry_after,
         "message": _safe_text(exc),
+        # The embedding client raises RuntimeError("failed after N attempts") from the real
+        # error. Report the real one (type and status only) so the screen can name the cause.
+        "cause_class": type(cause).__name__ if cause else None,
+        "cause_http_status": (
+            getattr(cause, "http_status", None) or getattr(cause, "status_code", None)
+            if cause
+            else None
+        ),
     }
 
 
@@ -274,6 +285,63 @@ class IngestionService:
             "frozen_plan": bool(metadata.get("plan_hash")),
         }
 
+    @staticmethod
+    def index_state(
+        stats: dict[str, Any],
+        job: dict[str, Any] | None,
+        now: datetime | None = None,
+        auto_enabled: bool = False,
+    ) -> dict[str, Any]:
+        """One clear state for the books list: what is happening, or why it stopped.
+
+        running | stalled | paused | error | interrupted | complete | partial | ready |
+        not_prepared. `detail` is a short reason; `idle_seconds` is the time since the job last
+        reported (web jobs only: the command-line pipeline sends no heartbeat).
+        """
+        now = now or datetime.now(timezone.utc)
+        beat = _parse((job or {}).get("heartbeat_at"))
+        idle = int((now - beat).total_seconds()) if beat else None
+        status = (job or {}).get("status")
+        if status in ACTIVE:
+            if idle is not None and idle > STALLED_SECONDS:
+                return {
+                    "state": "stalled",
+                    "detail": f"No progress reported for {idle // 60} min {idle % 60} s",
+                    "idle_seconds": idle,
+                }
+            how = "" if beat else "Command-line run"
+            return {"state": "running", "detail": how or None, "idle_seconds": idle}
+        if stats.get("complete"):
+            return {"state": "complete", "detail": None, "idle_seconds": None}
+        if not stats.get("prepared"):
+            return {"state": "not_prepared", "detail": None, "idle_seconds": None}
+        reason = (job or {}).get("stop_reason")
+        if auto_enabled:
+            # Waiting its turn in the automatic queue. An earlier failed attempt is context,
+            # not the current state: the queue will try again.
+            last = None
+            if status == "failed" and reason != "interrupted":
+                last = "Last attempt failed: " + _safe_text((job or {}).get("error") or "", 160)
+            elif status == "paused":
+                last = f"Last run paused: {reason or 'paused'}"
+            return {"state": "queued", "detail": last, "idle_seconds": None}
+        if status == "paused":
+            return {"state": "paused", "detail": reason or "Paused", "idle_seconds": None}
+        if status == "failed":
+            if reason == "interrupted":
+                return {
+                    "state": "interrupted",
+                    "detail": "The job stopped reporting (server restarted or crashed)",
+                    "idle_seconds": None,
+                }
+            return {
+                "state": "error",
+                "detail": _safe_text((job or {}).get("error") or "The job failed", 200),
+                "idle_seconds": None,
+            }
+        state = "partial" if stats.get("embedded_chunks") else "ready"
+        return {"state": state, "detail": None, "idle_seconds": None}
+
     def _stats_for(self, book: dict[str, Any]) -> dict[str, Any]:
         rows = {r["book_id"]: r for r in knowledge_db.book_stats(self.db)}
         return self.book_stats(book, rows.get(book["id"]))
@@ -281,7 +349,33 @@ class IngestionService:
     def overview(self) -> dict[str, Any]:
         self.recover_stale_jobs()
         rows = {r["book_id"]: r for r in knowledge_db.book_stats(self.db)}
-        books = [self.book_stats(b, rows.get(b["id"])) for b in knowledge_db.list_books(self.db)]
+        latest: dict[str, dict[str, Any]] = {}
+        for job in knowledge_db.list_ingestion_jobs(self.db, limit=300):  # newest first
+            latest.setdefault(job["book_id"], job)
+        books = []
+        for b in knowledge_db.list_books(self.db):
+            stats = self.book_stats(b, rows.get(b["id"]))
+            job = latest.get(b["id"])
+            flag = (b.get("metadata") or {}).get("auto_resume") or {}
+            books.append(
+                {
+                    **stats,
+                    **self.index_state(stats, job, auto_enabled=bool(flag.get("enabled"))),
+                    "latest_job": job,
+                    "auto_resume": {
+                        "enabled": bool(flag.get("enabled")),
+                        "since": flag.get("since"),
+                        "failures": int(flag.get("failures") or 0),
+                        "note": flag.get("note"),
+                    },
+                }
+            )
+        queue = sorted(
+            (x for x in books if x["auto_resume"]["enabled"]),
+            key=lambda x: x["auto_resume"]["since"] or "",
+        )
+        for place, item in enumerate(queue, start=1):
+            item["auto_resume"]["position"] = place
         active = knowledge_db.list_ingestion_jobs(self.db, statuses=ACTIVE, limit=50)
         return {"limits": self.limits(), "books": books, "active_jobs": active}
 
@@ -516,6 +610,8 @@ class IngestionService:
         for job in knowledge_db.list_ingestion_jobs(
             self.db, book_id=book_id, statuses=ACTIVE, limit=50
         ):
+            if not job.get("heartbeat_at") and job.get("token_limit") is None:
+                continue  # run by the command-line pipeline, which does not send heartbeats
             seen = (
                 _parse(job.get("heartbeat_at"))
                 or _parse(job.get("started_at"))
@@ -608,13 +704,19 @@ class IngestionService:
     def _take_batch(self, pending: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The first chunks whose estimated tokens fit one request (always at least one)."""
         batch: list[dict[str, Any]] = []
+        reserve = getattr(self.embedder, "document_token_reservation", None)
+        tpm = getattr(self.embedder, "tokens_per_minute", 0)
+        reserved = 0
         total = 0
         for row in pending:
             tokens = _estimate(row)
-            if batch and total + tokens > self.batch_tokens:
+            provider_tokens = reserve(row["content"]) if reserve and tpm > 0 else 0
+            if batch and (total + tokens > self.batch_tokens or tpm > 0
+                          and reserved + provider_tokens > tpm):
                 break
             batch.append(row)
             total += tokens
+            reserved += provider_tokens
         return batch
 
     def _pace(self, last_request: float | None) -> float:
@@ -632,6 +734,22 @@ class IngestionService:
         tokens = int(job.get("embedded_tokens") or 0)
         last_request: float | None = None
         batches = 0
+        last_check = -math.inf
+        cancellation: tuple[str, str] | None = None
+
+        def stop_waiting() -> bool:
+            nonlocal last_check, cancellation
+            now = self.clock()
+            if now - last_check >= 2:
+                last_check = now
+                current = knowledge_db.get_ingestion_job(self.db, job_id) or job
+                reason = self.provider_pause()
+                if current.get("pause_requested"):
+                    cancellation = ("Paused by the operator", "paused")
+                elif reason:
+                    cancellation = (reason, "provider_stop")
+            return cancellation is not None
+
         while True:
             fresh = knowledge_db.get_ingestion_job(self.db, job_id) or job
             if fresh.get("pause_requested"):
@@ -724,7 +842,20 @@ class IngestionService:
 
             last_request = self._pace(last_request)
             try:
-                result = self.embedder.embed_documents([r["content"] for r in batch])
+                texts = [row["content"] for row in batch]
+                if isinstance(self.embedder, VoyageEmbeddingProvider):
+                    result = self.embedder.embed_documents(texts, cancelled=stop_waiting)
+                else:
+                    result = self.embedder.embed_documents(texts)
+            except VoyageBudgetUnavailable:
+                message, reason = cancellation or (
+                    "Waiting for shared Voyage capacity", "provider_budget_wait",
+                )
+                self._stop(
+                    job, "paused", message, reason, "warning",
+                    chunks_embedded=processed, tokens_used=tokens,
+                )
+                return
             except Exception as exc:
                 details = provider_error_details(exc)
                 status = details["http_status"]
@@ -736,10 +867,15 @@ class IngestionService:
                         "dashboard before retrying."
                     )
                     kind = "provider_rate_limited"
-                    self._set_provider_stop()
+                    if (quota_exhausted(exc) or not details["retry_after_seconds"]
+                            or not getattr(self.embedder, "uses_shared_budget", False)):
+                        self._set_provider_stop()
                 else:
+                    real = details["cause_class"] or details["error_class"]
+                    code = details["cause_http_status"]
                     message = (
-                        f"The provider returned an error ({details['error_class']}). "
+                        f"The provider returned an error ({real}"
+                        f"{f', HTTP {code}' if code else ''}). "
                         "This batch was not stored."
                     )
                     kind = "provider_error"

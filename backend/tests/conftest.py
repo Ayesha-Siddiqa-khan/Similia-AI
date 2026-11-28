@@ -50,6 +50,10 @@ class FakeKnowledgeDB:
         self._sequence = 0
         self.flags: dict[str, dict] = {}
 
+    def update_book_metadata(self, book_id: str, patch: dict) -> None:
+        book = self.books[book_id]
+        book["metadata"] = {**(book.get("metadata") or {}), **patch}
+
     def get_system_flag(self, key: str) -> dict | None:
         return self.flags.get(key)
 
@@ -255,6 +259,7 @@ def install_fake_db(monkeypatch: pytest.MonkeyPatch) -> FakeKnowledgeDB:
         "book_stats",
         "list_chunks",
         "get_system_flag",
+        "update_book_metadata",
         "set_system_flag",
     ):
         # Production functions take a client first; bound fake methods do not.

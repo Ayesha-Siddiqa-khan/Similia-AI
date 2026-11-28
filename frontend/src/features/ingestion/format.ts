@@ -1,4 +1,4 @@
-import type { BookIndexStats, JobOut, PlanOut } from "./types";
+import type { BookIndexStats, BookOverviewItem, JobOut, PlanOut } from "./types";
 
 export type IndexState = "complete" | "partial" | "unprepared";
 export const indexState = (b: BookIndexStats): IndexState => (b.complete ? "complete" : b.prepared ? "partial" : "unprepared");
@@ -24,4 +24,30 @@ export function compactDetails(details: Record<string, unknown>): string {
   if (keys.length === 0) return "";
   const text = keys.map((k) => `${k}: ${typeof details[k] === "object" ? JSON.stringify(details[k]) : String(details[k])}`).join(", ");
   return text.length > 140 ? `${text.slice(0, 137)}...` : text;
+}
+
+const ORDINALS = ["th", "st", "nd", "rd"];
+export function ordinal(n: number): string {
+  const v = n % 100;
+  return `${n}${ORDINALS[(v - 20) % 10] ?? ORDINALS[v] ?? ORDINALS[0]}`;
+}
+/** "12s ago", "3 min ago", "2 h ago" from a number of seconds. */
+export function agoLabel(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
+}
+/** Percent of the book (or of its running job) already done, from real counts only. */
+export function percentDone(b: BookOverviewItem): number {
+  const job = b.state === "running" ? b.latest_job : null;
+  const [done, total] = job && job.total_chunks > 0 ? [job.processed_chunks, job.total_chunks] : [b.embedded_chunks, b.total_chunks];
+  return total > 0 ? Math.min(100, Math.max(0, Math.round(done / total * 100))) : 0;
+}
+export const ATTENTION_STATES = ["error", "stalled", "interrupted", "paused"] as const;
+/** Why a book cannot be queued for automatic resume, or null when it can. */
+export function autoBlocker(b: BookOverviewItem): string | null {
+  if (b.frozen_plan) return "Command-line pipeline: continue it with the command line";
+  if (!b.prepared) return "Not prepared yet";
+  if (b.complete || b.pending_chunks === 0) return "Already complete";
+  if (b.auto_resume.enabled) return "Automatic resume is already on";
+  return null;
 }

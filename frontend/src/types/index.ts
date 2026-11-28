@@ -7,4 +7,5 @@ export type BackendStatus = "ok" | "down" | "checking";
 export interface BackendHealth {
   backend: "ok" | "down";
   latencyMs?: number;
+  instanceId?: string;
 }

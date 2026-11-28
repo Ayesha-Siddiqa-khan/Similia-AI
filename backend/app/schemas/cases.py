@@ -153,6 +153,7 @@ class AnalysisPassageOut(BaseModel):
     page_end: int | None = None
     book_complete: bool = True  # False: the book is only partly indexed
     retrieval_mode: str = "semantic"  # "keyword": found by word matching, not by meaning
+    matched_by: list[str] = []
     content: str
     similarity: float
 
@@ -166,7 +167,9 @@ class AnalysisOut(BaseModel):
     passages: list[AnalysisPassageOut] = []
     missing_information: list[str] = []
     cautions: list[str] = []  # patient-specific cautions (children, infants)
-    retrieval_mode: str = "semantic"  # "keyword" when any passage was found by word matching
+    retrieval_mode: str = "semantic"  # the method that actually ran: semantic, keyword, hybrid
+    requested_mode: str = "semantic"
+    fallback_reason: str | None = None
     incomplete_books: list[str] = []  # titles of partly indexed books the evidence came from
     model: str | None = None
     created_at: datetime
@@ -185,6 +188,28 @@ class QuestionOut(BaseModel):
     example_answer_ur: str = ""
 
 
+class UrduRemedyOut(BaseModel):
+    remedy: str
+    rationale: str
+    matching_symptoms: list[str] = []
+    contradicting_symptoms: list[str] = []
+
+
+class UrduReportOut(BaseModel):
+    """Machine translation of the AI-written parts of an analysis. Book passages stay English."""
+
+    analysis_id: UUID
+    chief_complaint: str = ""
+    red_flags: list[str] = []
+    cautions: list[str] = []
+    remedies: list[UrduRemedyOut] = []
+    missing_information: list[str] = []
+    notice: str = (
+        "Machine translation by AI. Have it checked before you rely on it. "
+        "Book passages are shown in their original English."
+    )
+
+
 class QuestionsOut(BaseModel):
     red_flags: list[str] = []
     mental: list[QuestionOut] = []
@@ -201,6 +226,15 @@ class ReviewIn(BaseModel):
     analysis_id: UUID
     decision: Literal["accepted", "modified", "rejected"]
     chosen_remedy: str | None = Field(default=None, max_length=200)
+    diagnosis: str | None = Field(default=None)
+    potency: str | None = Field(default=None, max_length=100)
+    dose: str | None = Field(default=None, max_length=200)
+    frequency: str | None = Field(default=None, max_length=200)
+    duration: str | None = Field(default=None, max_length=200)
+    instructions: str | None = Field(default=None, max_length=2000)
+    urgency_disposition: str | None = Field(default=None, max_length=2000)
+    include_urgent_in_pdf: bool = False
+    practitioner_name: str | None = Field(default=None, max_length=200)  # as typed by the signer
     notes: str | None = Long
 
 
@@ -210,5 +244,14 @@ class ReviewOut(BaseModel):
     analysis_id: UUID
     decision: str
     chosen_remedy: str | None = None
+    diagnosis: str | None = None
+    potency: str | None = None
+    dose: str | None = None
+    frequency: str | None = None
+    duration: str | None = None
+    instructions: str | None = None
+    urgency_disposition: str | None = None
+    include_urgent_in_pdf: bool = False
+    practitioner_name: str | None = None
     notes: str | None = None
     signed_at: datetime
